@@ -8,21 +8,63 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  accountLists       AccountList[]
+  sentConnections    Connection[]  @relation("SentConnections")
+  receivedConnections Connection[] @relation("ReceivedConnections")
 
   @@map("users")
 }
 
-model Session {
+model AccountList {
   id        String   @id @default(cuid())
   userId    String
-  expiresAt DateTime
+  name      String
+  status    String   @default("draft") // draft, active
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accounts Account[]
 
   @@index([userId])
-  @@map("sessions")
+  @@map("account_lists")
+}
+
+model Account {
+  id            String  @id @default(cuid())
+  accountListId String
+  accountName   String
+  normalizedName String
+  type          String? // customer, prospect, null
+  createdAt     DateTime @default(now())
+
+  accountList AccountList @relation(fields: [accountListId], references: [id], onDelete: Cascade)
+
+  @@index([accountListId])
+  @@index([normalizedName])
+  @@map("accounts")
+}
+
+model Connection {
+  id          String   @id @default(cuid())
+  senderId    String
+  receiverId  String
+  status      String   @default("pending") // pending, accepted, rejected
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sender   User @relation("SentConnections", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User @relation("ReceivedConnections", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([senderId, receiverId])
+  @@index([senderId])
+  @@index([receiverId])
+  @@map("connections")
 }
