@@ -3,6 +3,14 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { HealthStatusDto } from '../src/health/dto';
+import { PrismaService } from '../src/prisma/prisma.service';
+
+const mockPrismaService = {
+  $connect: () => Promise.resolve(),
+  $disconnect: () => Promise.resolve(),
+  onModuleInit: () => Promise.resolve(),
+  onModuleDestroy: () => Promise.resolve(),
+};
 
 describe('HealthController (e2e)', () => {
   let app: INestApplication;
@@ -10,7 +18,10 @@ describe('HealthController (e2e)', () => {
   beforeEach(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(PrismaService)
+      .useValue(mockPrismaService)
+      .compile();
 
     app = moduleFixture.createNestApplication();
     await app.init();

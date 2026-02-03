@@ -9,12 +9,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.AppModule = void 0;
 const common_1 = require("@nestjs/common");
 const health_module_1 = require("./health/health.module");
+const prisma_module_1 = require("./prisma/prisma.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
 exports.AppModule = AppModule = __decorate([
     (0, common_1.Module)({
-        imports: [health_module_1.HealthModule],
+        imports: [prisma_module_1.PrismaModule, health_module_1.HealthModule],
     })
 ], AppModule);
 //# sourceMappingURL=app.module.js.map
