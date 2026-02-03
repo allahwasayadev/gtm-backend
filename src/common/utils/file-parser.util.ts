@@ -9,21 +9,38 @@ export interface ParsedAccount {
 export async function parseAccountsFile(
   buffer: Buffer,
   mimetype: string,
+  filename: string,
 ): Promise<ParsedAccount[]> {
-  if (
+  console.log('Received mimetype:', mimetype, 'filename:', filename);
+
+  const extension = filename.toLowerCase().split('.').pop();
+
+  const isCsv =
+    extension === 'csv' ||
     mimetype === 'text/csv' ||
+    mimetype === 'application/csv' ||
+    mimetype === 'text/plain' ||
+    mimetype.includes('csv');
+
+  const isExcel =
+    extension === 'xlsx' ||
+    extension === 'xls' ||
+    mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
     mimetype === 'application/vnd.ms-excel' ||
-    mimetype === 'text/plain'
-  ) {
+    mimetype === 'application/excel' ||
+    mimetype === 'application/x-excel' ||
+    mimetype === 'application/x-msexcel' ||
+    mimetype.includes('spreadsheet') ||
+    mimetype.includes('excel');
+
+  if (isCsv) {
     return parseCsvFile(buffer);
-  } else if (
-    mimetype ===
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-    mimetype === 'application/vnd.ms-excel'
-  ) {
+  } else if (isExcel) {
     return parseExcelFile(buffer);
   } else {
-    throw new Error('Unsupported file type. Please upload CSV or Excel file.');
+    throw new Error(
+      `Unsupported file type: ${mimetype} (${filename}). Please upload CSV or Excel file.`,
+    );
   }
 }
 

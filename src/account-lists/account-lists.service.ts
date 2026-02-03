@@ -9,7 +9,11 @@ export class AccountListsService {
   constructor(private prisma: PrismaService) {}
 
   async uploadFile(userId: string, file: Express.Multer.File, listName: string) {
-    const parsedAccounts = await parseAccountsFile(file.buffer, file.mimetype);
+    const parsedAccounts = await parseAccountsFile(
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+    );
 
     const accountList = await this.prisma.accountList.create({
       data: {
