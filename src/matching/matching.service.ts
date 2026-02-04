@@ -33,10 +33,12 @@ export class MatchingService {
       this.prisma.accountList.findFirst({
         where: { userId, status: 'active' },
         include: { accounts: true },
+        orderBy: { updatedAt: 'desc' },
       }),
       this.prisma.accountList.findFirst({
         where: { userId: otherUserId, status: 'active' },
         include: { accounts: true },
+        orderBy: { updatedAt: 'desc' },
       }),
     ]);
 
