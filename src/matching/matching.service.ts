@@ -1,5 +1,5 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { Injectable } from '@nestjs/common';
+import { Account } from '@prisma/client';
 
 export interface MatchedAccount {
   accountName: string;
@@ -11,51 +11,24 @@ export interface MatchedAccount {
 
 @Injectable()
 export class MatchingService {
-  constructor(private prisma: PrismaService) {}
-
-  async getMatches(userId: string, connectionId: string): Promise<MatchedAccount[]> {
-    const connection = await this.prisma.connection.findFirst({
-      where: {
-        id: connectionId,
-        OR: [{ senderId: userId }, { receiverId: userId }],
-        status: 'accepted',
-      },
-    });
-
-    if (!connection) {
-      throw new NotFoundException('Connection not found or not accepted');
-    }
-
-    const otherUserId =
-      connection.senderId === userId ? connection.receiverId : connection.senderId;
-
-    const [yourActiveList, theirActiveList] = await Promise.all([
-      this.prisma.accountList.findFirst({
-        where: { userId, status: 'active' },
-        include: { accounts: true },
-        orderBy: { updatedAt: 'desc' },
-      }),
-      this.prisma.accountList.findFirst({
-        where: { userId: otherUserId, status: 'active' },
-        include: { accounts: true },
-        orderBy: { updatedAt: 'desc' },
-      }),
-    ]);
-
-    if (!yourActiveList) {
+  findMatches(
+    yourAccounts: Account[],
+    theirAccounts: Account[],
+  ): MatchedAccount[] {
+    if (!yourAccounts || yourAccounts.length === 0) {
       return [];
     }
 
-    if (!theirActiveList) {
+    if (!theirAccounts || theirAccounts.length === 0) {
       return [];
     }
 
     const matches: MatchedAccount[] = [];
     const theirAccountsMap = new Map(
-      theirActiveList.accounts.map((account) => [account.normalizedName, account]),
+      theirAccounts.map((account) => [account.normalizedName, account]),
     );
 
-    for (const yourAccount of yourActiveList.accounts) {
+    for (const yourAccount of yourAccounts) {
       const theirAccount = theirAccountsMap.get(yourAccount.normalizedName);
       if (theirAccount) {
         matches.push({

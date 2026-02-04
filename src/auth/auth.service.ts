@@ -5,20 +5,20 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { PrismaService } from '../prisma/prisma.service';
+import { AuthRepository } from './auth.repository';
 import { SignupDto, LoginDto } from './dto';
 
 @Injectable()
 export class AuthService {
   constructor(
-    private prisma: PrismaService,
+    private authRepository: AuthRepository,
     private jwtService: JwtService,
   ) {}
 
   async signup(signupDto: SignupDto) {
-    const existingUser = await this.prisma.user.findUnique({
-      where: { email: signupDto.email },
-    });
+    const existingUser = await this.authRepository.findUserByEmail(
+      signupDto.email,
+    );
 
     if (existingUser) {
       throw new ConflictException('Email already in use');
@@ -26,32 +26,27 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(signupDto.password, 10);
 
-    const user = await this.prisma.user.create({
-      data: {
-        name: signupDto.name,
-        email: signupDto.email,
-        passwordHash,
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        createdAt: true,
-      },
+    const user = await this.authRepository.createUser({
+      name: signupDto.name,
+      email: signupDto.email,
+      passwordHash: passwordHash,
     });
 
     const token = this.generateToken(user.id, user.email);
 
     return {
-      user,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        createdAt: user.createdAt,
+      },
       token,
     };
   }
 
   async login(loginDto: LoginDto) {
-    const user = await this.prisma.user.findUnique({
-      where: { email: loginDto.email },
-    });
+    const user = await this.authRepository.findUserByEmail(loginDto.email);
 
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
@@ -80,21 +75,18 @@ export class AuthService {
   }
 
   async getProfile(userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        createdAt: true,
-      },
-    });
+    const user = await this.authRepository.findUserById(userId);
 
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
 
-    return user;
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      createdAt: user.createdAt,
+    };
   }
 
   private generateToken(userId: string, email: string): string {

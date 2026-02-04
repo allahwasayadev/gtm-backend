@@ -4,17 +4,17 @@ import {
   ConflictException,
   BadRequestException,
 } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { ConnectionsRepository } from './connections.repository';
 import { CreateConnectionDto } from './dto/create-connection.dto';
 
 @Injectable()
 export class ConnectionsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private connectionsRepository: ConnectionsRepository) {}
 
   async createConnection(senderId: string, createConnectionDto: CreateConnectionDto) {
-    const receiver = await this.prisma.user.findUnique({
-      where: { email: createConnectionDto.receiverEmail },
-    });
+    const receiver = await this.connectionsRepository.findUserByEmail(
+      createConnectionDto.receiverEmail,
+    );
 
     if (!receiver) {
       throw new NotFoundException('User not found with this email');
@@ -24,62 +24,26 @@ export class ConnectionsService {
       throw new BadRequestException('Cannot connect with yourself');
     }
 
-    const existingConnection = await this.prisma.connection.findFirst({
-      where: {
-        OR: [
-          { senderId, receiverId: receiver.id },
-          { senderId: receiver.id, receiverId: senderId },
-        ],
-      },
-    });
+    const existingConnection = await this.connectionsRepository.findExistingConnection(
+      senderId,
+      receiver.id,
+    );
 
     if (existingConnection) {
       throw new ConflictException('Connection already exists');
     }
 
-    const connection = await this.prisma.connection.create({
-      data: {
-        senderId,
-        receiverId: receiver.id,
-        status: 'pending',
-      },
-      include: {
-        receiver: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
+    const connection = await this.connectionsRepository.create({
+      senderId,
+      receiverId: receiver.id,
+      status: 'pending',
     });
 
     return connection;
   }
 
   async getConnections(userId: string) {
-    const connections = await this.prisma.connection.findMany({
-      where: {
-        OR: [{ senderId: userId }, { receiverId: userId }],
-      },
-      include: {
-        sender: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-        receiver: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const connections = await this.connectionsRepository.findAllByUser(userId);
 
     return connections.map((connection) => ({
       ...connection,
@@ -90,9 +54,7 @@ export class ConnectionsService {
   }
 
   async acceptConnection(connectionId: string, userId: string) {
-    const connection = await this.prisma.connection.findUnique({
-      where: { id: connectionId },
-    });
+    const connection = await this.connectionsRepository.findById(connectionId);
 
     if (!connection) {
       throw new NotFoundException('Connection not found');
@@ -106,18 +68,13 @@ export class ConnectionsService {
       throw new ConflictException('Connection already accepted');
     }
 
-    await this.prisma.connection.update({
-      where: { id: connectionId },
-      data: { status: 'accepted' },
-    });
+    await this.connectionsRepository.updateStatus(connectionId, 'accepted');
 
     return { message: 'Connection accepted successfully' };
   }
 
   async deleteConnection(connectionId: string, userId: string) {
-    const connection = await this.prisma.connection.findUnique({
-      where: { id: connectionId },
-    });
+    const connection = await this.connectionsRepository.findById(connectionId);
 
     if (!connection) {
       throw new NotFoundException('Connection not found');
@@ -127,9 +84,7 @@ export class ConnectionsService {
       throw new BadRequestException('You are not part of this connection');
     }
 
-    await this.prisma.connection.delete({
-      where: { id: connectionId },
-    });
+    await this.connectionsRepository.delete(connectionId);
 
     return { message: 'Connection deleted successfully' };
   }
