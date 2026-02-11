@@ -9,6 +9,11 @@ export interface MatchedAccount {
   theirType: string | null;
 }
 
+export interface PartnerAccountData {
+  partnerName: string;
+  theirAccounts: Account[];
+}
+
 @Injectable()
 export class MatchingService {
   findMatches(
@@ -42,5 +47,29 @@ export class MatchingService {
     }
 
     return matches;
+  }
+
+  buildAccountMatchesMap(
+    yourAccounts: Account[],
+    partners: PartnerAccountData[],
+  ): Record<string, Array<{ partnerName: string }>> {
+    const matchesMap: Record<string, Array<{ partnerName: string }>> = {};
+
+    for (const { partnerName, theirAccounts } of partners) {
+      const theirNormalizedMap = new Map(
+        theirAccounts.map((a) => [a.normalizedName, true]),
+      );
+
+      for (const yourAccount of yourAccounts) {
+        if (theirNormalizedMap.has(yourAccount.normalizedName)) {
+          if (!matchesMap[yourAccount.id]) {
+            matchesMap[yourAccount.id] = [];
+          }
+          matchesMap[yourAccount.id].push({ partnerName });
+        }
+      }
+    }
+
+    return matchesMap;
   }
 }

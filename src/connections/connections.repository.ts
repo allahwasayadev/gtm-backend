@@ -101,6 +101,32 @@ export class ConnectionsRepository {
     });
   }
 
+  async findAllAcceptedByUser(userId: string): Promise<ConnectionWithUsers[]> {
+    return this.prisma.connection.findMany({
+      where: {
+        OR: [{ senderId: userId }, { receiverId: userId }],
+        status: 'accepted',
+      },
+      include: {
+        sender: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        receiver: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    }) as any;
+  }
+
   async findAcceptedConnection(
     connectionId: string,
     userId: string,
