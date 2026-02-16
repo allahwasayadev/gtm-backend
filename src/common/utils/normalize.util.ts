@@ -4,8 +4,12 @@ export function normalizeAccountName(name: string): string {
   return name
     .toLowerCase()
     .trim()
-    .replace(/[^\w\s]/g, '') // Remove special characters
-    .replace(/\b(inc|llc|ltd|corp|corporation|company|co|the)\b/g, '') // Remove common suffixes
+    .replace(/&/g, 'and') // Normalize & to and before stripping special chars
+    .replace(/[^\w\s]/g, '') // Remove remaining special characters
+    .replace(
+      /\b(inc|incorporated|llc|ltd|limited|corp|corporation|company|co|the|group|holdings|enterprises|partners|associates|services|solutions|technologies|international|global)\b/g,
+      '',
+    ) // Remove common business suffixes and prefixes
     .replace(/\s+/g, ' ') // Normalize whitespace
     .trim();
 }

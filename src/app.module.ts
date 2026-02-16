@@ -5,15 +5,21 @@ import { AuthModule } from './auth/auth.module';
 import { AccountListsModule } from './account-lists/account-lists.module';
 import { ConnectionsModule } from './connections/connections.module';
 import { MatchingModule } from './matching/matching.module';
+import { UsersModule } from './users/users.module';
+import { EmailModule } from './email/email.module';
+import { InvitesModule } from './invites/invites.module';
 
 @Module({
   imports: [
     PrismaModule,
+    EmailModule,
     HealthModule,
     AuthModule,
+    UsersModule,
     AccountListsModule,
     ConnectionsModule,
     MatchingModule,
+    InvitesModule,
   ],
 })
 export class AppModule {}

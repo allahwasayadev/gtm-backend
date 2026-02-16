@@ -14,6 +14,9 @@ const auth_module_1 = require("./auth/auth.module");
 const account_lists_module_1 = require("./account-lists/account-lists.module");
 const connections_module_1 = require("./connections/connections.module");
 const matching_module_1 = require("./matching/matching.module");
+const users_module_1 = require("./users/users.module");
+const email_module_1 = require("./email/email.module");
+const invites_module_1 = require("./invites/invites.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -21,11 +24,14 @@ exports.AppModule = AppModule = __decorate([
     (0, common_1.Module)({
         imports: [
             prisma_module_1.PrismaModule,
+            email_module_1.EmailModule,
             health_module_1.HealthModule,
             auth_module_1.AuthModule,
+            users_module_1.UsersModule,
             account_lists_module_1.AccountListsModule,
             connections_module_1.ConnectionsModule,
             matching_module_1.MatchingModule,
+            invites_module_1.InvitesModule,
         ],
     })
 ], AppModule);

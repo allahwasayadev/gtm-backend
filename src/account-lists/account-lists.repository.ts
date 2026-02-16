@@ -56,7 +56,7 @@ export class AccountListsRepository {
 
   async findAllByUser(userId: string): Promise<AccountListWithCount[]> {
     return this.prisma.accountList.findMany({
-      where: { userId },
+      where: { userId, status: { not: 'archived' } },
       include: {
         _count: {
           select: { accounts: true },
@@ -83,6 +83,21 @@ export class AccountListsRepository {
     return this.prisma.accountList.delete({
       where: { id: listId },
     });
+  }
+
+  async archiveAllUserLists(
+    userId: string,
+    excludeListId: string,
+  ): Promise<number> {
+    const result = await this.prisma.accountList.updateMany({
+      where: {
+        userId,
+        status: { not: 'archived' },
+        id: { not: excludeListId },
+      },
+      data: { status: 'archived' },
+    });
+    return result.count;
   }
 
   async findFirstActive(

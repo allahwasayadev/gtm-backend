@@ -44,6 +44,7 @@ export class ConnectionsRepository {
             id: true,
             name: true,
             email: true,
+            company: true,
           },
         },
         sender: {
@@ -51,6 +52,7 @@ export class ConnectionsRepository {
             id: true,
             name: true,
             email: true,
+            company: true,
           },
         },
       },
@@ -68,6 +70,7 @@ export class ConnectionsRepository {
             id: true,
             name: true,
             email: true,
+            company: true,
           },
         },
         receiver: {
@@ -75,6 +78,7 @@ export class ConnectionsRepository {
             id: true,
             name: true,
             email: true,
+            company: true,
           },
         },
       },
@@ -113,6 +117,7 @@ export class ConnectionsRepository {
             id: true,
             name: true,
             email: true,
+            company: true,
           },
         },
         receiver: {
@@ -120,6 +125,7 @@ export class ConnectionsRepository {
             id: true,
             name: true,
             email: true,
+            company: true,
           },
         },
       },

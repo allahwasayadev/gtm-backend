@@ -21,6 +21,9 @@ export class AccountListsService {
       status: 'draft',
     });
 
+    // Archive all previous lists for this user
+    await this.accountListsRepository.archiveAllUserLists(userId, accountList.id);
+
     const accountsWithNormalizedNames = parsedAccounts.map((account) => ({
       accountListId: accountList.id,
       accountName: account.accountName,
@@ -78,6 +81,9 @@ export class AccountListsService {
     if (!accountList) {
       throw new NotFoundException('Account list not found');
     }
+
+    // Archive any other lists for this user
+    await this.accountListsRepository.archiveAllUserLists(userId, listId);
 
     await this.accountListsRepository.updateStatus(listId, 'active');
 

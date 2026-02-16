@@ -30,6 +30,7 @@ export class AuthService {
       name: signupDto.name,
       email: signupDto.email,
       passwordHash: passwordHash,
+      ...(signupDto.company && { company: signupDto.company }),
     });
 
     const token = this.generateToken(user.id, user.email);
@@ -39,6 +40,7 @@ export class AuthService {
         id: user.id,
         name: user.name,
         email: user.email,
+        company: user.company,
         createdAt: user.createdAt,
       },
       token,
@@ -68,6 +70,7 @@ export class AuthService {
         id: user.id,
         name: user.name,
         email: user.email,
+        company: user.company,
         createdAt: user.createdAt,
       },
       token,
@@ -85,6 +88,7 @@ export class AuthService {
       id: user.id,
       name: user.name,
       email: user.email,
+      company: user.company,
       createdAt: user.createdAt,
     };
   }

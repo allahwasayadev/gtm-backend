@@ -43,6 +43,7 @@ export class MatchingController {
 
       return {
         partnerName: otherUser.name,
+        partnerCompany: otherUser.company,
         theirAccounts: theirActiveList.accounts,
       } as PartnerAccountData;
     });
