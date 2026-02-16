@@ -21,9 +21,6 @@ export class AccountListsService {
       status: 'draft',
     });
 
-    // Archive all previous lists for this user
-    await this.accountListsRepository.archiveAllUserLists(userId, accountList.id);
-
     const accountsWithNormalizedNames = parsedAccounts.map((account) => ({
       accountListId: accountList.id,
       accountName: account.accountName,
