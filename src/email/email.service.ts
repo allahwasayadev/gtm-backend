@@ -1,15 +1,26 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Resend } from 'resend';
+import * as nodemailer from 'nodemailer';
 
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
-  private resend: Resend;
+  private transporter: nodemailer.Transporter;
   private frontendUrl: string;
+  private fromEmail: string;
 
   constructor() {
-    this.resend = new Resend(process.env.RESEND_API_KEY);
     this.frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    this.fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER || '';
+
+    this.transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: parseInt(process.env.SMTP_PORT || '587', 10),
+      secure: process.env.SMTP_SECURE === 'true',
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
   }
 
   async sendInviteEmail(
@@ -46,17 +57,12 @@ export class EmailService {
     `;
 
     try {
-      const { error } = await this.resend.emails.send({
-        from: 'GTM Account Mapper <onboarding@resend.dev>',
+      await this.transporter.sendMail({
+        from: `GTM Account Mapper <${this.fromEmail}>`,
         to,
         subject: `${inviterName} invited you to connect on GTM Account Mapper`,
         html,
       });
-
-      if (error) {
-        this.logger.error(`Failed to send invite email to ${to}:`, error);
-        return false;
-      }
 
       this.logger.log(`Invite email sent to ${to}`);
       return true;

@@ -6,10 +6,10 @@ const FUZZY_MATCH_THRESHOLD = 0.85;
 
 export interface MatchedAccount {
   accountName: string;
+  yourAccountName: string;
+  theirAccountName: string;
   yourAccountId: string;
   theirAccountId: string;
-  type: string | null;
-  theirType: string | null;
   matchConfidence: number;
 }
 
@@ -44,10 +44,10 @@ export class MatchingService {
       if (theirAccount && !matchedTheirIds.has(theirAccount.id)) {
         matches.push({
           accountName: yourAccount.accountName,
+          yourAccountName: yourAccount.accountName,
+          theirAccountName: theirAccount.accountName,
           yourAccountId: yourAccount.id,
           theirAccountId: theirAccount.id,
-          type: yourAccount.type,
-          theirType: theirAccount.type,
           matchConfidence: 1.0,
         });
         matchedTheirIds.add(theirAccount.id);
@@ -79,10 +79,10 @@ export class MatchingService {
       if (bestMatch) {
         matches.push({
           accountName: yourAccount.accountName,
+          yourAccountName: yourAccount.accountName,
+          theirAccountName: bestMatch.accountName,
           yourAccountId: yourAccount.id,
           theirAccountId: bestMatch.id,
-          type: yourAccount.type,
-          theirType: bestMatch.type,
           matchConfidence: bestScore,
         });
         // Remove from unmatched pool to prevent double-matching
@@ -97,8 +97,8 @@ export class MatchingService {
   buildAccountMatchesMap(
     yourAccounts: Account[],
     partners: PartnerAccountData[],
-  ): Record<string, Array<{ partnerName: string; partnerCompany: string | null }>> {
-    const matchesMap: Record<string, Array<{ partnerName: string; partnerCompany: string | null }>> = {};
+  ): Record<string, Array<{ partnerName: string; partnerCompany: string | null; matchConfidence: number; theirAccountName: string }>> {
+    const matchesMap: Record<string, Array<{ partnerName: string; partnerCompany: string | null; matchConfidence: number; theirAccountName: string }>> = {};
 
     for (const { partnerName, partnerCompany, theirAccounts } of partners) {
       const matched = this.findMatches(yourAccounts, theirAccounts);
@@ -106,7 +106,12 @@ export class MatchingService {
         if (!matchesMap[match.yourAccountId]) {
           matchesMap[match.yourAccountId] = [];
         }
-        matchesMap[match.yourAccountId].push({ partnerName, partnerCompany });
+        matchesMap[match.yourAccountId].push({
+          partnerName,
+          partnerCompany,
+          matchConfidence: match.matchConfidence,
+          theirAccountName: match.theirAccountName,
+        });
       }
     }
 
