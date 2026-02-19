@@ -3,9 +3,13 @@ import { JwtModule } from '@nestjs/jwt';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { UsersRepository } from './users.repository';
+import { ConnectionsModule } from '../connections/connections.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
+    ConnectionsModule,
+    NotificationsModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'gtm-secret-key-change-in-production',
       signOptions: { expiresIn: '7d' },

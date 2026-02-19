@@ -8,6 +8,7 @@ import { MatchingModule } from './matching/matching.module';
 import { UsersModule } from './users/users.module';
 import { EmailModule } from './email/email.module';
 import { InvitesModule } from './invites/invites.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { InvitesModule } from './invites/invites.module';
     ConnectionsModule,
     MatchingModule,
     InvitesModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}

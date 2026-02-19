@@ -5,6 +5,7 @@ import {
   Delete,
   Param,
   Body,
+  Query,
   UseGuards,
   Request,
 } from '@nestjs/common';
@@ -26,8 +27,12 @@ export class ConnectionsController {
   }
 
   @Get()
-  async getConnections(@Request() req: any) {
-    return this.connectionsService.getConnections(req.user.id);
+  async getConnections(
+    @Request() req: any,
+    @Query('includeMuted') includeMuted?: string,
+  ) {
+    const shouldIncludeMuted = includeMuted === 'true';
+    return this.connectionsService.getConnections(req.user.id, shouldIncludeMuted);
   }
 
   @Post(':id/accept')
@@ -38,5 +43,15 @@ export class ConnectionsController {
   @Delete(':id')
   async deleteConnection(@Param('id') id: string, @Request() req: any) {
     return this.connectionsService.deleteConnection(id, req.user.id);
+  }
+
+  @Post(':id/mute')
+  async muteConnection(@Param('id') id: string, @Request() req: any) {
+    return this.connectionsService.muteConnection(id, req.user.id);
+  }
+
+  @Post(':id/unmute')
+  async unmuteConnection(@Param('id') id: string, @Request() req: any) {
+    return this.connectionsService.unmuteConnection(id, req.user.id);
   }
 }

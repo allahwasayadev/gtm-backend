@@ -17,6 +17,7 @@ export class AuthRepository {
     email: string;
     passwordHash: string;
     company?: string;
+    isOemSeller: boolean;
   }): Promise<User> {
     return this.prisma.user.create({
       data,
@@ -26,6 +27,91 @@ export class AuthRepository {
   async findUserById(id: string): Promise<User | null> {
     return this.prisma.user.findUnique({
       where: { id },
+    });
+  }
+
+  // Email verification methods
+  async updateEmailVerification(
+    userId: string,
+    data: {
+      emailVerificationCode?: string | null;
+      emailVerificationCodeExpiresAt?: Date | null;
+      emailVerificationAttempts?: number;
+      lastVerificationCodeSentAt?: Date;
+    },
+  ): Promise<User> {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data,
+    });
+  }
+
+  async setEmailVerified(userId: string): Promise<User> {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        emailVerified: true,
+        emailVerificationCode: null,
+        emailVerificationCodeExpiresAt: null,
+        emailVerificationAttempts: 0,
+      },
+    });
+  }
+
+  async incrementVerificationAttempts(userId: string): Promise<User> {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        emailVerificationAttempts: { increment: 1 },
+      },
+    });
+  }
+
+  // Password reset methods
+  async updatePasswordReset(
+    userId: string,
+    data: {
+      passwordResetToken?: string | null;
+      passwordResetTokenExpiresAt?: Date | null;
+      passwordResetAttempts?: number;
+      lastPasswordResetRequestAt?: Date;
+    },
+  ): Promise<User> {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data,
+    });
+  }
+
+  async findUserByPasswordResetToken(tokenHash: string): Promise<User | null> {
+    return this.prisma.user.findFirst({
+      where: {
+        passwordResetToken: tokenHash,
+        passwordResetTokenExpiresAt: {
+          gt: new Date(),
+        },
+      },
+    });
+  }
+
+  async updatePassword(userId: string, passwordHash: string): Promise<User> {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        passwordHash,
+        passwordResetToken: null,
+        passwordResetTokenExpiresAt: null,
+        passwordResetAttempts: 0,
+      },
+    });
+  }
+
+  async incrementPasswordResetAttempts(userId: string): Promise<User> {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        passwordResetAttempts: { increment: 1 },
+      },
     });
   }
 }

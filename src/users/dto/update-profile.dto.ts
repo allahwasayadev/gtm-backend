@@ -1,4 +1,4 @@
-import { IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class UpdateProfileDto {
   @IsOptional()
@@ -13,4 +13,8 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsString()
   company?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isOemSeller?: boolean;
 }

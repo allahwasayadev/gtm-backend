@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength, IsBoolean } from 'class-validator';
 
 export class SignupDto {
   @IsNotEmpty()
@@ -17,4 +17,7 @@ export class SignupDto {
   @IsOptional()
   @IsString()
   company?: string;
+
+  @IsBoolean()
+  isOemSeller: boolean;
 }

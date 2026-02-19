@@ -52,25 +52,38 @@ export class InvitesService {
         );
 
       if (existingConnection) {
+        const status = existingConnection.status;
+        if (status === 'accepted') {
+          return {
+            alreadyUser: true,
+            alreadyConnected: true,
+            message: 'You are already connected with this user.',
+          };
+        }
         return {
           alreadyUser: true,
-          alreadyConnected: true,
-          message: 'You are already connected with this user.',
+          alreadyConnected: false,
+          pendingRequest: true,
+          message: 'A connection request is already pending with this user.',
         };
       }
-
-      // Create direct connection (auto-accepted)
       const connection = await this.connectionsRepository.create({
         senderId: userId,
         receiverId: existingUser.id,
-        status: 'accepted',
+        status: 'pending',
       });
+      await this.emailService.sendConnectionRequestEmail(
+        existingUser.email,
+        existingUser.name,
+        userName,
+        userCompany,
+      );
 
       return {
         alreadyUser: true,
         alreadyConnected: false,
         connection,
-        message: `Connected with ${existingUser.name} directly (they already have an account).`,
+        message: `Connection request sent to ${existingUser.name}. They will need to accept it.`,
       };
     }
 

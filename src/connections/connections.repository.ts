@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import { Connection, Prisma, User } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { Connection, User } from '@prisma/client';
 
 export interface ConnectionWithUsers extends Connection {
   sender: User;
@@ -45,6 +45,7 @@ export class ConnectionsRepository {
             name: true,
             email: true,
             company: true,
+            isOemSeller: true,
           },
         },
         sender: {
@@ -53,6 +54,7 @@ export class ConnectionsRepository {
             name: true,
             email: true,
             company: true,
+            isOemSeller: true,
           },
         },
       },
@@ -71,6 +73,7 @@ export class ConnectionsRepository {
             name: true,
             email: true,
             company: true,
+            isOemSeller: true,
           },
         },
         receiver: {
@@ -79,6 +82,7 @@ export class ConnectionsRepository {
             name: true,
             email: true,
             company: true,
+            isOemSeller: true,
           },
         },
       },
@@ -90,6 +94,77 @@ export class ConnectionsRepository {
     return this.prisma.connection.findUnique({
       where: { id },
     });
+  }
+
+  async setMutedForUser(
+    connection: Connection,
+    userId: string,
+    mutedAt: Date,
+    mutedMatchCount: number,
+  ): Promise<Connection> {
+    const isSender = connection.senderId === userId;
+    const data: Prisma.ConnectionUpdateInput = isSender
+      ? {
+          senderMutedAt: mutedAt,
+          senderMutedMatchCount: mutedMatchCount,
+        }
+      : {
+          receiverMutedAt: mutedAt,
+          receiverMutedMatchCount: mutedMatchCount,
+        };
+
+    return this.prisma.connection.update({
+      where: { id: connection.id },
+      data,
+    });
+  }
+
+  async clearMutedForUser(
+    connection: Connection,
+    userId: string,
+  ): Promise<Connection> {
+    const isSender = connection.senderId === userId;
+    const data: Prisma.ConnectionUpdateInput = isSender
+      ? {
+          senderMutedAt: null,
+          senderMutedMatchCount: null,
+        }
+      : {
+          receiverMutedAt: null,
+          receiverMutedMatchCount: null,
+        };
+
+    return this.prisma.connection.update({
+      where: { id: connection.id },
+      data,
+    });
+  }
+
+  async updateLastObservedSharedMatchCount(
+    connectionId: string,
+    sharedMatchCount: number,
+  ): Promise<void> {
+    await this.prisma.connection.update({
+      where: { id: connectionId },
+      data: { lastObservedSharedMatchCount: sharedMatchCount },
+    });
+  }
+
+  async claimSharedMatchIncrease(
+    connectionId: string,
+    previousSharedMatchCount: number | null,
+    nextSharedMatchCount: number,
+  ): Promise<boolean> {
+    const where: Prisma.ConnectionWhereInput = {
+      id: connectionId,
+      lastObservedSharedMatchCount: previousSharedMatchCount,
+    };
+    const result = await this.prisma.connection.updateMany({
+      where,
+      data: { lastObservedSharedMatchCount: nextSharedMatchCount },
+    });
+
+    return result.count === 1;
   }
 
   async updateStatus(id: string, status: string): Promise<Connection> {
@@ -118,6 +193,7 @@ export class ConnectionsRepository {
             name: true,
             email: true,
             company: true,
+            isOemSeller: true,
           },
         },
         receiver: {
@@ -126,6 +202,7 @@ export class ConnectionsRepository {
             name: true,
             email: true,
             company: true,
+            isOemSeller: true,
           },
         },
       },
@@ -144,5 +221,59 @@ export class ConnectionsRepository {
         status: 'accepted',
       },
     });
+  }
+
+  async findAcceptedConnectionWithUsers(
+    connectionId: string,
+    userId: string,
+  ): Promise<ConnectionWithUsers | null> {
+    return this.prisma.connection.findFirst({
+      where: {
+        id: connectionId,
+        OR: [{ senderId: userId }, { receiverId: userId }],
+        status: 'accepted',
+      },
+      include: {
+        sender: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            company: true,
+            isOemSeller: true,
+          },
+        },
+        receiver: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            company: true,
+            isOemSeller: true,
+          },
+        },
+      },
+    }) as any;
+  }
+
+  async findAcceptedConnectionUserIds(userId: string): Promise<string[]> {
+    const connections = await this.prisma.connection.findMany({
+      where: {
+        status: 'accepted',
+        OR: [{ senderId: userId }, { receiverId: userId }],
+      },
+      select: { senderId: true, receiverId: true },
+    });
+
+    const recipientIds = new Set<string>();
+    for (const connection of connections) {
+      recipientIds.add(
+        connection.senderId === userId
+          ? connection.receiverId
+          : connection.senderId,
+      );
+    }
+
+    return [...recipientIds];
   }
 }

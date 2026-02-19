@@ -12,15 +12,30 @@ model User {
   email        String   @unique
   name         String
   company      String?
+  isOemSeller  Boolean  @default(false)
   passwordHash String
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+
+  // Email verification
+  emailVerified                  Boolean   @default(false)
+  emailVerificationCode          String?
+  emailVerificationCodeExpiresAt DateTime?
+  emailVerificationAttempts      Int       @default(0)
+  lastVerificationCodeSentAt     DateTime?
+
+  // Password reset
+  passwordResetToken             String?
+  passwordResetTokenExpiresAt    DateTime?
+  passwordResetAttempts          Int       @default(0)
+  lastPasswordResetRequestAt     DateTime?
 
   accountLists       AccountList[]
   sentConnections    Connection[]  @relation("SentConnections")
   receivedConnections Connection[] @relation("ReceivedConnections")
   sentInvites        Invite[]     @relation("SentInvites")
   acceptedInvites    Invite[]     @relation("AcceptedInvites")
+  notifications       Notification[]
 
   @@map("users")
 }
@@ -60,16 +75,55 @@ model Connection {
   senderId    String
   receiverId  String
   status      String   @default("pending") // pending, accepted, rejected
+  senderMutedAt                DateTime?
+  receiverMutedAt              DateTime?
+  senderMutedMatchCount        Int?
+  receiverMutedMatchCount      Int?
+  lastObservedSharedMatchCount Int?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   sender   User @relation("SentConnections", fields: [senderId], references: [id], onDelete: Cascade)
   receiver User @relation("ReceivedConnections", fields: [receiverId], references: [id], onDelete: Cascade)
+  matchDecisions AccountMatchDecision[]
 
   @@unique([senderId, receiverId])
   @@index([senderId])
   @@index([receiverId])
   @@map("connections")
+}
+
+model AccountMatchDecision {
+  id           String   @id @default(cuid())
+  connectionId String
+  yourAccountId String
+  theirAccountId String
+  decision     String // accepted, rejected
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, yourAccountId, theirAccountId])
+  @@index([connectionId])
+  @@map("account_match_decisions")
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  message   String
+  ctaUrl    String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@map("notifications")
 }
 
 model Invite {
