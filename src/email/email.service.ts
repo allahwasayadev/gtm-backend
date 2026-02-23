@@ -136,20 +136,17 @@ export class EmailService {
           Hi ${firstName},
         </p>
         <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 20px;">
-          New shared accounts were identified between you and ${connectionName} on <strong>GTM Account Mapper</strong>.
+          New shared accounts were just identified between you and ${connectionName}.
         </p>
         <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 24px;">
-          Log in to review the updated overlaps.
+          Log in to review the updated overlaps and see where alignment has expanded.
         </p>
         <a href="${ctaUrl}" style="display: inline-block; background: #4f46e5; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 15px;">
           View Your Overlaps
         </a>
-        <p style="color: #94a3b8; font-size: 13px; margin: 24px 0 0;">
-          Or copy this link: <a href="${ctaUrl}" style="color: #6366f1;">${ctaUrl}</a>
-        </p>
         <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 32px 0 16px;" />
         <p style="color: #94a3b8; font-size: 12px; margin: 0;">
-          Thanks,<br />GTM Account Mapper
+          Thanks,<br />Ovrlap
         </p>
       </div>
     `;
@@ -158,7 +155,7 @@ export class EmailService {
       await this.transporter.sendMail({
         from: `GTM Account Mapper <${this.fromEmail}>`,
         to,
-        subject: `New overlaps with ${connectionName} – GTM Account Mapper`,
+        subject: `New Overlaps Found in Ovrlap`,
         html,
       });
 

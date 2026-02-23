@@ -65,8 +65,19 @@ export class ConnectionsService {
       accountsCache,
     );
 
-    return connections
-      .map((c) => this.toConnectionResponse(c, userId))
+    const connectionResponses = await Promise.all(
+      connections.map(async (connection) => {
+        let sharedMatchCount = 0;
+        if (connection.status === 'accepted') {
+          const otherUserId = this.getOtherUserId(connection, userId);
+          sharedMatchCount = await this.getSharedMatchCount( userId, otherUserId, accountsCache );
+        }
+
+        return this.toConnectionResponse(connection, userId, sharedMatchCount);
+      }),
+    );
+
+    return connectionResponses
       .filter((c) => includeMuted || c.status !== 'accepted' || !c.isMuted);
   }
 
@@ -205,6 +216,7 @@ export class ConnectionsService {
   private toConnectionResponse(
     connection: ConnectionWithUsers,
     userId: string,
+    sharedMatchCount: number,
   ) {
     const mutedState = this.getMutedStateForUser(connection, userId);
     const isSender = connection.senderId === userId;
@@ -213,6 +225,7 @@ export class ConnectionsService {
       otherUser: isSender ? connection.receiver : connection.sender,
       isSender,
       isMuted: mutedState.isMuted,
+      sharedMatchCount,
     };
   }
 

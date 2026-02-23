@@ -150,7 +150,10 @@ export class ConnectionsRepository {
     });
   }
 
-  async claimSharedMatchIncrease(
+  async claimSharedMatchIncrease( connectionId: string, previousSharedMatchCount: number | null, nextSharedMatchCount: number ): Promise<boolean> {
+    return this.claimSharedMatchCountUpdate( connectionId, previousSharedMatchCount, nextSharedMatchCount );
+  }
+  async claimSharedMatchCountUpdate(
     connectionId: string,
     previousSharedMatchCount: number | null,
     nextSharedMatchCount: number,

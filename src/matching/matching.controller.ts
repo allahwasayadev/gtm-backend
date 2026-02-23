@@ -284,11 +284,18 @@ export class MatchingController {
       return false;
     }
 
-    if (currentSharedCount <= previousSharedCount) {
+    if (currentSharedCount === previousSharedCount) return false;
+
+    if (currentSharedCount < previousSharedCount) {
+      const synced = await this.connectionsRepository.claimSharedMatchCountUpdate( connection.id, previousSharedCount, currentSharedCount );
+
+      if (!synced) return false;
+
+      connection.lastObservedSharedMatchCount = currentSharedCount;
       return false;
     }
 
-    const claimed = await this.connectionsRepository.claimSharedMatchIncrease(
+    const claimed = await this.connectionsRepository.claimSharedMatchCountUpdate(
       connection.id,
       previousSharedCount,
       currentSharedCount,
