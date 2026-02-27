@@ -13,6 +13,7 @@ model User {
   name         String
   company      String?
   isOemSeller  Boolean  @default(false)
+  hasCompletedOnboarding Boolean @default(false)
   passwordHash String
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -23,6 +24,14 @@ model User {
   emailVerificationCodeExpiresAt DateTime?
   emailVerificationAttempts      Int       @default(0)
   lastVerificationCodeSentAt     DateTime?
+
+  // Phone verification
+  phoneNumber                    String?
+  isPhoneVerified                Boolean   @default(false)
+  phoneVerificationCode          String?
+  phoneVerificationCodeExpiresAt DateTime?
+  phoneVerificationAttempts      Int       @default(0)
+  lastPhoneVerificationCodeSentAt DateTime?
 
   // Password reset
   passwordResetToken             String?
@@ -36,6 +45,7 @@ model User {
   sentInvites        Invite[]     @relation("SentInvites")
   acceptedInvites    Invite[]     @relation("AcceptedInvites")
   notifications       Notification[]
+  observedOverlapNotifications ObservedOverlapNotification[]
 
   @@map("users")
 }
@@ -86,6 +96,7 @@ model Connection {
   sender   User @relation("SentConnections", fields: [senderId], references: [id], onDelete: Cascade)
   receiver User @relation("ReceivedConnections", fields: [receiverId], references: [id], onDelete: Cascade)
   matchDecisions AccountMatchDecision[]
+  observedOverlapNotifications ObservedOverlapNotification[]
 
   @@unique([senderId, receiverId])
   @@index([senderId])
@@ -93,11 +104,29 @@ model Connection {
   @@map("connections")
 }
 
+model ObservedOverlapNotification {
+  id                   String   @id @default(cuid())
+  userId               String
+  connectionId         String
+  senderNormalizedName String
+  receiverNormalizedName String
+  createdAt            DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, connectionId, senderNormalizedName, receiverNormalizedName])
+  @@index([connectionId, userId])
+  @@map("observed_overlap_notifications")
+}
+
 model AccountMatchDecision {
   id           String   @id @default(cuid())
   connectionId String
   yourAccountId String
   theirAccountId String
+  yourNormalizedNameSnapshot String?
+  theirNormalizedNameSnapshot String?
   decision     String // accepted, rejected
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

@@ -6,7 +6,7 @@ export class HealthService {
   getStatus(): HealthStatusDto {
     return {
       status: 'ok',
-      service: 'gtm-backend',
+      service: 'ovrlap-backend',
       timestamp: new Date().toISOString(),
       version: process.env.npm_package_version ?? '0.0.1',
     };

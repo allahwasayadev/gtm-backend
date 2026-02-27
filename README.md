@@ -1,6 +1,6 @@
-# GTM Backend
+# Ovrlap Backend
 
-Backend API for the GTM (Go To Market) Account Mapper application, built with [NestJS](https://nestjs.com/) and [Prisma](https://www.prisma.io/).
+Backend API for the Ovrlap account mapping application, built with [NestJS](https://nestjs.com/) and [Prisma](https://www.prisma.io/).
 
 ## Tech Stack
 
@@ -32,7 +32,7 @@ npm install
 Make sure PostgreSQL is running, then create the database:
 
 ```bash
-createdb gtm_db
+createdb ovrlap_db
 ```
 
 ### 3. Configure environment variables
@@ -46,7 +46,7 @@ cp .env.example .env
 Edit `.env` with your database connection details:
 
 ```env
-DATABASE_URL="postgresql://<username>:<password>@localhost:5432/gtm_db?schema=public"
+DATABASE_URL="postgresql://<username>:<password>@localhost:5432/ovrlap_db?schema=public"
 PORT=3001
 JWT_SECRET=your-secret-key-here
 ```

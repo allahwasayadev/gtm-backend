@@ -150,6 +150,19 @@ export class ConnectionsRepository {
     });
   }
 
+  async resetLastObservedSharedMatchCountForUser(userId: string): Promise<number> {
+    const result = await this.prisma.connection.updateMany({
+      where: {
+        OR: [{ senderId: userId }, { receiverId: userId }],
+      },
+      data: {
+        lastObservedSharedMatchCount: 0,
+      },
+    });
+
+    return result.count;
+  }
+
   async claimSharedMatchIncrease( connectionId: string, previousSharedMatchCount: number | null, nextSharedMatchCount: number ): Promise<boolean> {
     return this.claimSharedMatchCountUpdate( connectionId, previousSharedMatchCount, nextSharedMatchCount );
   }

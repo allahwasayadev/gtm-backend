@@ -38,7 +38,7 @@ export class EmailService {
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px;">
         <h2 style="color: #1e293b; margin: 0 0 16px;">You've been invited to connect!</h2>
         <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 8px;">
-          <strong>${fromLine}</strong> has invited you to connect on <strong>GTM Account Mapper</strong> — a tool for reps to compare account lists and find overlaps.
+          <strong>${fromLine}</strong> has invited you to connect on <strong>OvrLap</strong> — a tool for reps to compare account lists and find overlaps.
         </p>
         <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 24px;">
           Accept the invite to automatically connect and start seeing shared accounts.
@@ -58,9 +58,9 @@ export class EmailService {
 
     try {
       await this.transporter.sendMail({
-        from: `GTM Account Mapper <${this.fromEmail}>`,
+        from: `OvrLap <${this.fromEmail}>`,
         to,
-        subject: `${inviterName} invited you to connect on GTM Account Mapper`,
+        subject: `${inviterName} invited you to connect on OvrLap`,
         html,
       });
 
@@ -90,7 +90,7 @@ export class EmailService {
           Hi ${recipientName.split(' ')[0]},
         </p>
         <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 20px;">
-          <strong>${fromLine}</strong> wants to connect with you on <strong>GTM Account Mapper</strong>.
+          <strong>${fromLine}</strong> wants to connect with you on <strong>OvrLap</strong>.
         </p>
         <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 24px;">
           Accept the request to start seeing shared accounts and collaborate on deals.
@@ -103,16 +103,16 @@ export class EmailService {
         </p>
         <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 32px 0 16px;" />
         <p style="color: #94a3b8; font-size: 12px; margin: 0;">
-          Thanks,<br />GTM Account Mapper
+          Thanks,<br />OvrLap
         </p>
       </div>
     `;
 
     try {
       await this.transporter.sendMail({
-        from: `GTM Account Mapper <${this.fromEmail}>`,
+        from: `OvrLap <${this.fromEmail}>`,
         to,
-        subject: `${senderName} wants to connect with you on GTM Account Mapper`,
+        subject: `${senderName} wants to connect with you on OvrLap`,
         html,
       });
 
@@ -146,16 +146,16 @@ export class EmailService {
         </a>
         <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 32px 0 16px;" />
         <p style="color: #94a3b8; font-size: 12px; margin: 0;">
-          Thanks,<br />Ovrlap
+          Thanks,<br />OvrLap
         </p>
       </div>
     `;
 
     try {
       await this.transporter.sendMail({
-        from: `GTM Account Mapper <${this.fromEmail}>`,
+        from: `OvrLap <${this.fromEmail}>`,
         to,
-        subject: `New Overlaps Found in Ovrlap`,
+        subject: `New Overlaps Found in OvrLap`,
         html,
       });
 
@@ -181,7 +181,7 @@ export class EmailService {
           Hi ${firstName},
         </p>
         <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 24px;">
-          Welcome to <strong>GTM Account Mapper</strong>! Please use the verification code below to confirm your email address.
+          Welcome to <strong>OvrLap</strong>! Please use the verification code below to confirm your email address.
         </p>
         <div style="background: #f1f5f9; border-radius: 12px; padding: 24px; text-align: center; margin: 0 0 24px;">
           <span style="font-size: 32px; font-weight: 700; letter-spacing: 8px; color: #1e293b;">${code}</span>
@@ -194,14 +194,14 @@ export class EmailService {
         </p>
         <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 32px 0 16px;" />
         <p style="color: #94a3b8; font-size: 12px; margin: 0;">
-          Thanks,<br />GTM Account Mapper
+          Thanks,<br />OvrLap
         </p>
       </div>
     `;
 
     try {
       await this.transporter.sendMail({
-        from: `GTM Account Mapper <${this.fromEmail}>`,
+        from: `OvrLap <${this.fromEmail}>`,
         to,
         subject: `Your verification code: ${code}`,
         html,
@@ -230,7 +230,7 @@ export class EmailService {
           Hi ${firstName},
         </p>
         <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 24px;">
-          We received a request to reset your password for your <strong>GTM Account Mapper</strong> account. Click the button below to set a new password.
+          We received a request to reset your password for your <strong>OvrLap</strong> account. Click the button below to set a new password.
         </p>
         <a href="${resetUrl}" style="display: inline-block; background: #4f46e5; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 15px;">
           Reset Password
@@ -246,16 +246,16 @@ export class EmailService {
         </p>
         <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 32px 0 16px;" />
         <p style="color: #94a3b8; font-size: 12px; margin: 0;">
-          Thanks,<br />GTM Account Mapper
+          Thanks,<br />OvrLap
         </p>
       </div>
     `;
 
     try {
       await this.transporter.sendMail({
-        from: `GTM Account Mapper <${this.fromEmail}>`,
+        from: `OvrLap <${this.fromEmail}>`,
         to,
-        subject: `Reset your password – GTM Account Mapper`,
+        subject: `Reset your password – OvrLap`,
         html,
       });
 

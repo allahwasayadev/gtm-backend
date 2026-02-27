@@ -22,10 +22,28 @@ export class UsersRepository {
     return this.prisma.user.findMany();
   }
 
-  async update(id: string, data: Partial<User>): Promise<User> {
-    return this.prisma.user.update({
+  async update(id: string, data: any): Promise<User> {
+    return (this.prisma.user as any).update({
       where: { id },
       data,
+    });
+  }
+
+  async incrementPhoneVerificationAttempts(id: string): Promise<User> {
+    return (this.prisma.user as any).update({
+      where: { id },
+      data: {
+        phoneVerificationAttempts: { increment: 1 },
+      },
+    });
+  }
+
+  async markOnboardingComplete(id: string): Promise<User> {
+    return this.prisma.user.update({
+      where: { id },
+      data: {
+        hasCompletedOnboarding: true,
+      },
     });
   }
 

@@ -4,6 +4,7 @@ import { ConnectionsRepository } from '../connections/connections.repository';
 import { EmailService } from '../email/email.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MatchDecisionsRepository } from './match-decisions.repository';
+import { ObservedOverlapNotificationsRepository } from './observed-overlap-notifications.repository';
 import { MatchingController } from './matching.controller';
 import { MatchingService } from './matching.service';
 
@@ -80,11 +81,12 @@ describe('MatchingController', () => {
   let emailService: jest.Mocked<EmailService>;
   let notificationsService: jest.Mocked<NotificationsService>;
   let matchDecisionsRepository: jest.Mocked<MatchDecisionsRepository>;
+  let observedOverlapNotificationsRepository: jest.Mocked<ObservedOverlapNotificationsRepository>;
 
   beforeEach(() => {
     matchingService = {
       findMatches: jest.fn(),
-      buildResolvedAccountMatchesMap: jest.fn(),
+      buildAllMatchesResponse: jest.fn(),
     } as unknown as jest.Mocked<MatchingService>;
 
     connectionsRepository = {
@@ -93,7 +95,7 @@ describe('MatchingController', () => {
       findAcceptedConnectionWithUsers: jest.fn(),
       clearMutedForUser: jest.fn(),
       updateLastObservedSharedMatchCount: jest.fn(),
-      claimSharedMatchIncrease: jest.fn(),
+      claimSharedMatchCountUpdate: jest.fn(),
     } as unknown as jest.Mocked<ConnectionsRepository>;
 
     accountListsRepository = {
@@ -113,6 +115,10 @@ describe('MatchingController', () => {
       upsertDecision: jest.fn(),
     } as unknown as jest.Mocked<MatchDecisionsRepository>;
 
+    observedOverlapNotificationsRepository = {
+      claimNew: jest.fn(),
+    } as unknown as jest.Mocked<ObservedOverlapNotificationsRepository>;
+
     controller = new MatchingController(
       matchingService,
       connectionsRepository,
@@ -120,6 +126,7 @@ describe('MatchingController', () => {
       emailService,
       notificationsService,
       matchDecisionsRepository,
+      observedOverlapNotificationsRepository,
     );
   });
 
@@ -135,10 +142,10 @@ describe('MatchingController', () => {
     );
     accountListsRepository.findFirstActive
       .mockResolvedValueOnce({
-        accounts: [{ id: 'your-1' }],
+        accounts: [{ id: 'your-1', accountName: 'Your 1', normalizedName: 'your-1' }],
       } as never)
       .mockResolvedValueOnce({
-        accounts: [{ id: 'their-1' }],
+        accounts: [{ id: 'their-1', accountName: 'Their 1', normalizedName: 'their-1' }],
       } as never);
     matchDecisionsRepository.findByConnection
       .mockResolvedValueOnce([])
@@ -177,8 +184,22 @@ describe('MatchingController', () => {
       senderMutedMatchCount: null,
     } as never);
     notificationsService.createNewOverlapNotifications.mockResolvedValue({
-      count: 1,
+      count: 2,
     });
+    observedOverlapNotificationsRepository.claimNew.mockResolvedValue([
+      {
+        userId: 'sender-1',
+        connectionId: 'c-1',
+        senderNormalizedName: 'your-1',
+        receiverNormalizedName: 'their-1',
+      },
+      {
+        userId: 'receiver-1',
+        connectionId: 'c-1',
+        senderNormalizedName: 'your-1',
+        receiverNormalizedName: 'their-1',
+      },
+    ]);
 
     await controller.setMatchDecision(
       'c-1',
@@ -197,11 +218,15 @@ describe('MatchingController', () => {
         userId: 'sender-1',
         connectionName: 'Receiver One',
         connectionId: 'c-1',
+        accountName: 'Your 1',
+        partnerAccountName: 'Their 1',
       },
       {
         userId: 'receiver-1',
         connectionName: 'Sender One',
         connectionId: 'c-1',
+        accountName: 'Their 1',
+        partnerAccountName: 'Your 1',
       },
     ]);
   });
@@ -293,7 +318,7 @@ describe('MatchingController', () => {
       )
       .mockResolvedValue();
 
-    connectionsRepository.claimSharedMatchIncrease.mockResolvedValue(true);
+    connectionsRepository.claimSharedMatchCountUpdate.mockResolvedValue(true);
 
     await (
       controller as unknown as {
@@ -304,11 +329,11 @@ describe('MatchingController', () => {
       }
     ).handleSharedMatchCountChange(connection, 2);
 
-    expect(connectionsRepository.claimSharedMatchIncrease).toHaveBeenCalledWith(
+    expect(connectionsRepository.claimSharedMatchCountUpdate).toHaveBeenCalledWith(
       'c-1',
       1,
       2,
     );
-    expect(sendNewOverlapNotificationsSpy).toHaveBeenCalledWith(connection);
+    expect(sendNewOverlapNotificationsSpy).not.toHaveBeenCalled();
   });
 });

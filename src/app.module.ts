@@ -9,11 +9,13 @@ import { UsersModule } from './users/users.module';
 import { EmailModule } from './email/email.module';
 import { InvitesModule } from './invites/invites.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { SmsModule } from './sms/sms.module';
 
 @Module({
   imports: [
     PrismaModule,
     EmailModule,
+    SmsModule,
     HealthModule,
     AuthModule,
     UsersModule,

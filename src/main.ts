@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
@@ -21,7 +22,7 @@ async function bootstrap() {
 
   const port = process.env.PORT ?? 3001;
   await app.listen(port);
-  console.log(`GTM Backend running at http://localhost:${port}`);
+  console.log(`OvrLap Backend running at http://localhost:${port}`);
 }
 
 void bootstrap();

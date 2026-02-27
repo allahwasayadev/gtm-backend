@@ -40,7 +40,7 @@ describe('HealthController (e2e)', () => {
         const body = res.body as HealthStatusDto;
         expect(body).toMatchObject({
           status: 'ok',
-          service: 'gtm-backend',
+          service: 'ovrlap-backend',
         });
         expect(body.timestamp).toBeDefined();
         expect(body.version).toBeDefined();

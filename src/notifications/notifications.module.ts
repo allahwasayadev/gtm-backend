@@ -7,7 +7,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { NotificationsGateway } from './notifications.gateway';
 
 @Module({
-  imports: [PrismaModule, JwtModule.register({ secret: process.env.JWT_SECRET || 'gtm-secret-key-change-in-production', signOptions: { expiresIn: '7d' } })],
+  imports: [PrismaModule, JwtModule.register({ secret: process.env.JWT_SECRET || 'ovrlap-secret-key-change-in-production', signOptions: { expiresIn: '7d' } })],
   controllers: [NotificationsController],
   providers: [NotificationsService, NotificationsRepository, NotificationsGateway],
   exports: [NotificationsService],

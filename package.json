@@ -1,7 +1,7 @@
 {
-  "name": "gtm-backend",
+  "name": "ovrlap-backend",
   "version": "0.0.1",
-  "description": "GTM Backend API",
+  "description": "OvrLap Backend API",
   "author": "",
   "private": true,
   "license": "UNLICENSED",

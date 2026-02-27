@@ -16,6 +16,7 @@ export interface NotificationListItem {
 interface GetNotificationsOptions {
   unreadOnly?: boolean;
   limit?: number;
+  offset?: number;
 }
 
 @Injectable()
@@ -46,22 +47,49 @@ export class NotificationsService {
     return { updated: count };
   }
 
+  async getMyUnreadCount(userId: string) {
+    const count = await this.notificationsRepository.countUnreadByUser(userId);
+    return { count };
+  }
+
   async createNewOverlapNotifications(
     payloads: Array<{
       userId: string;
       connectionName: string;
       connectionId: string;
+      accountName?: string;
+      partnerAccountName?: string;
     }>,
   ) {
     const data: CreateNotificationInput[] = payloads.map((p) => ({
       userId: p.userId,
       type: 'new_overlaps',
-      title: `New overlaps with ${p.connectionName}`,
-      message: `New shared accounts were identified between you and ${p.connectionName}.`,
+      title: p.accountName
+        ? `New overlap: ${p.accountName}`
+        : `New overlaps with ${p.connectionName}`,
+      message: p.accountName
+        ? this.buildNewOverlapAccountMessage(
+            p.accountName,
+            p.connectionName,
+            p.partnerAccountName,
+          )
+        : `New shared accounts were identified between you and ${p.connectionName}.`,
       ctaUrl: `/dashboard/matches?connection=${p.connectionId}`,
     }));
 
     return this.createAndPublish(data);
+  }
+
+  private buildNewOverlapAccountMessage(
+    accountName: string,
+    connectionName: string,
+    partnerAccountName?: string,
+  ): string {
+    if (!partnerAccountName || partnerAccountName === accountName) {
+      return `"${accountName}" overlaps with ${connectionName}.`;
+    }
+
+    return `"${accountName}" overlaps with ${connectionName}'s "${partnerAccountName}".`;
   }
 
   async createUserProfileUpdatedNotifications(payload: { actorUserName: string, recipientUserIds: string[], actorUserId: string }) {

@@ -20,7 +20,7 @@ describe('HealthService', () => {
     const result = service.getStatus();
     expect(result).toEqual({
       status: 'ok',
-      service: 'gtm-backend',
+      service: 'ovrlap-backend',
       timestamp: expect.any(String) as string,
       version: expect.any(String) as string,
     });

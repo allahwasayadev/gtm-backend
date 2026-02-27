@@ -32,15 +32,23 @@ export class NotificationsRepository {
     );
   }
 
-  async findByUser( userId: string, options?: { unreadOnly?: boolean; limit?: number }): Promise<Notification[]> {
-    const limit = Math.max(1, Math.min(options?.limit ?? 20, 100));
+  async findByUser( userId: string, options?: { unreadOnly?: boolean; limit?: number; offset?: number } ): Promise<Notification[]> {
+    const take =
+      typeof options?.limit === 'number'
+        ? Math.max(1, Math.min(options.limit, 100))
+        : undefined;
+    const skip =
+      typeof options?.offset === 'number'
+        ? Math.max(0, Math.floor(options.offset))
+        : undefined;
     return this.prisma.notification.findMany({
       where: {
         userId,
         ...(options?.unreadOnly && { readAt: null }),
       },
       orderBy: { createdAt: 'desc' },
-      take: limit,
+      ...(typeof skip === 'number' ? { skip } : {}),
+      ...(typeof take === 'number' ? { take } : {}),
     });
   }
 
@@ -58,5 +66,11 @@ export class NotificationsRepository {
       data: { readAt: new Date() },
     });
     return result.count;
+  }
+
+  async countUnreadByUser(userId: string): Promise<number> {
+    return this.prisma.notification.count({
+      where: { userId, readAt: null },
+    });
   }
 }

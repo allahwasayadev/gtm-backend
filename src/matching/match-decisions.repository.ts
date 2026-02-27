@@ -8,6 +8,8 @@ export interface MatchDecisionRecord {
   connectionId: string;
   yourAccountId: string;
   theirAccountId: string;
+  yourNormalizedNameSnapshot: string | null;
+  theirNormalizedNameSnapshot: string | null;
   decision: MatchDecisionType;
   createdAt: Date;
   updatedAt: Date;
@@ -28,6 +30,8 @@ export class MatchDecisionsRepository {
       connectionId: decision.connectionId,
       yourAccountId: decision.yourAccountId,
       theirAccountId: decision.theirAccountId,
+      yourNormalizedNameSnapshot: decision.yourNormalizedNameSnapshot,
+      theirNormalizedNameSnapshot: decision.theirNormalizedNameSnapshot,
       decision: decision.decision as MatchDecisionType,
       createdAt: decision.createdAt,
       updatedAt: decision.updatedAt,
@@ -39,6 +43,8 @@ export class MatchDecisionsRepository {
     yourAccountId: string;
     theirAccountId: string;
     decision: MatchDecisionType;
+    yourNormalizedNameSnapshot?: string | null;
+    theirNormalizedNameSnapshot?: string | null;
   }): Promise<MatchDecisionRecord> {
     const decision = await this.prisma.accountMatchDecision.upsert({
       where: {
@@ -52,10 +58,14 @@ export class MatchDecisionsRepository {
         connectionId: params.connectionId,
         yourAccountId: params.yourAccountId,
         theirAccountId: params.theirAccountId,
+        yourNormalizedNameSnapshot: params.yourNormalizedNameSnapshot ?? null,
+        theirNormalizedNameSnapshot: params.theirNormalizedNameSnapshot ?? null,
         decision: params.decision,
       },
       update: {
         decision: params.decision,
+        yourNormalizedNameSnapshot: params.yourNormalizedNameSnapshot ?? null,
+        theirNormalizedNameSnapshot: params.theirNormalizedNameSnapshot ?? null,
       },
     });
 
@@ -64,6 +74,8 @@ export class MatchDecisionsRepository {
       connectionId: decision.connectionId,
       yourAccountId: decision.yourAccountId,
       theirAccountId: decision.theirAccountId,
+      yourNormalizedNameSnapshot: decision.yourNormalizedNameSnapshot,
+      theirNormalizedNameSnapshot: decision.theirNormalizedNameSnapshot,
       decision: decision.decision as MatchDecisionType,
       createdAt: decision.createdAt,
       updatedAt: decision.updatedAt,

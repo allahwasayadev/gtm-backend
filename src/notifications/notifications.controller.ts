@@ -16,18 +16,29 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 export class NotificationsController {
   constructor(private notificationsService: NotificationsService) {}
 
+  @Get('unread-count')
+  async getMyUnreadCount(@Request() req: any): Promise<{ count: number }> {
+    return this.notificationsService.getMyUnreadCount(req.user.id);
+  }
+
   @Get()
   async getMyNotifications(
     @Request() req: any,
     @Query('unreadOnly') unreadOnly?: string,
     @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
   ): Promise<NotificationListItem[]> {
     const parsedLimit = Number(limit);
+    const parsedOffset = Number(offset);
     return this.notificationsService.getMyNotifications(req.user.id, {
       unreadOnly: unreadOnly === 'true',
       limit:
         Number.isFinite(parsedLimit) && parsedLimit > 0
           ? parsedLimit
+          : undefined,
+      offset:
+        Number.isFinite(parsedOffset) && parsedOffset >= 0
+          ? parsedOffset
           : undefined,
     });
   }

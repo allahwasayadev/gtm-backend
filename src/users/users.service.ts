@@ -3,13 +3,36 @@ import {
   ConflictException,
   NotFoundException,
   Logger,
+  BadRequestException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import type { User } from '@prisma/client';
 import { JwtService } from '@nestjs/jwt';
+import * as crypto from 'crypto';
 import { UsersRepository } from './users.repository';
-import { UpdateProfileDto } from './dto/update-profile.dto';
+import {
+  CompleteOnboardingDto,
+  SendPhoneVerificationCodeDto,
+  UpdateProfileDto,
+  VerifyPhoneVerificationCodeDto,
+} from './dto';
 import { ConnectionsRepository } from '../connections/connections.repository';
 import { NotificationsService } from '../notifications/notifications.service';
+import { TwilioSmsService } from '../sms/twilio-sms.service';
+
+const PHONE_VERIFICATION_CODE_EXPIRY_MINUTES = 10;
+const PHONE_VERIFICATION_RESEND_COOLDOWN_SECONDS = 60;
+const MAX_PHONE_VERIFICATION_ATTEMPTS = 5;
+
+type UserWithPhoneVerification = User & {
+  phoneNumber?: string | null;
+  isPhoneVerified?: boolean;
+  phoneVerificationCode?: string | null;
+  phoneVerificationCodeExpiresAt?: Date | null;
+  phoneVerificationAttempts?: number;
+  lastPhoneVerificationCodeSentAt?: Date | null;
+};
 
 export interface UpdatedProfileResponse {
   id: string;
@@ -17,8 +40,29 @@ export interface UpdatedProfileResponse {
   email: string;
   company: string | null;
   isOemSeller: boolean;
+  hasCompletedOnboarding: boolean;
+  phoneNumber: string | null;
+  isPhoneVerified: boolean;
   createdAt: Date;
   token?: string;
+}
+
+export interface SendPhoneVerificationCodeResponse {
+  message: string;
+  phoneNumber: string;
+  isPhoneVerified: boolean;
+  expiresAt?: Date;
+}
+
+export interface VerifyPhoneVerificationCodeResponse {
+  message: string;
+  phoneNumber: string;
+  isPhoneVerified: boolean;
+}
+
+export interface CompleteOnboardingResponse {
+  message: string;
+  hasCompletedOnboarding: boolean;
 }
 
 @Injectable()
@@ -30,10 +74,13 @@ export class UsersService {
     private jwtService: JwtService,
     private connectionsRepository: ConnectionsRepository,
     private notificationsService: NotificationsService,
+    private twilioSmsService: TwilioSmsService,
   ) {}
 
   async getProfile(userId: string) {
-    const user = await this.usersRepository.findById(userId);
+    const user = (await this.usersRepository.findById(
+      userId,
+    )) as UserWithPhoneVerification | null;
     if (!user) {
       throw new NotFoundException('User not found');
     }
@@ -44,26 +91,69 @@ export class UsersService {
       email: user.email,
       company: user.company,
       isOemSeller: user.isOemSeller,
+      hasCompletedOnboarding: user.hasCompletedOnboarding,
+      phoneNumber: user.phoneNumber,
+      isPhoneVerified: Boolean(user.isPhoneVerified),
       createdAt: user.createdAt,
     };
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {
-    const user = await this.usersRepository.findById(userId);
+    const user = (await this.usersRepository.findById(
+      userId,
+    )) as UserWithPhoneVerification | null;
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
+    const normalizedPhoneNumber =
+      typeof dto.phoneNumber === 'string'
+        ? this.normalizePhoneNumber(dto.phoneNumber)
+        : undefined;
+    const currentPhoneNumber = user.phoneNumber ?? null;
+    const isPhoneNumberChanging =
+      typeof normalizedPhoneNumber !== 'undefined' &&
+      normalizedPhoneNumber !== currentPhoneNumber;
+
     const shouldNotifyConnections = this.hasProfileChanges(user, dto);
 
     if (dto.email && dto.email !== user.email) {
+      if (!user.isPhoneVerified || isPhoneNumberChanging) {
+        throw new BadRequestException(
+          'Please verify your phone number before updating your email.',
+        );
+      }
+    }
+
+    if (dto.email && dto.email !== user.email) {
       const existing = await this.usersRepository.findByEmail(dto.email);
-      if (existing) {
+      if (existing && existing.id !== user.id) {
         throw new ConflictException('Email already in use');
       }
     }
 
-    const updated = await this.usersRepository.update(userId, dto);
+    const updateData: any = {
+      ...(typeof dto.name === 'string' ? { name: dto.name } : {}),
+      ...(typeof dto.email === 'string' ? { email: dto.email } : {}),
+      ...(typeof dto.company === 'string' ? { company: dto.company } : {}),
+      ...(typeof dto.isOemSeller === 'boolean'
+        ? { isOemSeller: dto.isOemSeller }
+        : {}),
+    };
+
+    if (typeof normalizedPhoneNumber !== 'undefined' && isPhoneNumberChanging) {
+      updateData.phoneNumber = normalizedPhoneNumber;
+      updateData.isPhoneVerified = false;
+      updateData.phoneVerificationCode = null;
+      updateData.phoneVerificationCodeExpiresAt = null;
+      updateData.phoneVerificationAttempts = 0;
+      updateData.lastPhoneVerificationCodeSentAt = null;
+    }
+
+    const updated = (await this.usersRepository.update(
+      userId,
+      updateData,
+    )) as UserWithPhoneVerification;
 
     const result: UpdatedProfileResponse = {
       id: updated.id,
@@ -71,6 +161,9 @@ export class UsersService {
       email: updated.email,
       company: updated.company,
       isOemSeller: updated.isOemSeller,
+      hasCompletedOnboarding: updated.hasCompletedOnboarding,
+      phoneNumber: updated.phoneNumber ?? null,
+      isPhoneVerified: Boolean(updated.isPhoneVerified),
       createdAt: updated.createdAt,
     };
 
@@ -91,6 +184,171 @@ export class UsersService {
     }
 
     return result;
+  }
+
+  async sendPhoneVerificationCode(
+    userId: string,
+    dto: SendPhoneVerificationCodeDto,
+  ): Promise<SendPhoneVerificationCodeResponse> {
+    const user = (await this.usersRepository.findById(
+      userId,
+    )) as UserWithPhoneVerification | null;
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const phoneNumber = this.normalizePhoneNumber(dto.phoneNumber);
+
+    if (!phoneNumber) {
+      throw new BadRequestException('Phone number is required');
+    }
+
+    if (user.isPhoneVerified && user.phoneNumber === phoneNumber) {
+      return {
+        message: 'Phone number is already verified.',
+        phoneNumber,
+        isPhoneVerified: true,
+      };
+    }
+
+    if (user.lastPhoneVerificationCodeSentAt) {
+      const timeSinceLastSent =
+        (Date.now() - user.lastPhoneVerificationCodeSentAt.getTime()) / 1000;
+      if (timeSinceLastSent < PHONE_VERIFICATION_RESEND_COOLDOWN_SECONDS) {
+        const waitTime = Math.ceil(
+          PHONE_VERIFICATION_RESEND_COOLDOWN_SECONDS - timeSinceLastSent,
+        );
+        throw new HttpException(
+          `Please wait ${waitTime} seconds before requesting a new code.`,
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+    }
+
+    const code = this.generateVerificationCode();
+    const codeHash = this.hashCode(code);
+    const expiresAt = new Date(
+      Date.now() + PHONE_VERIFICATION_CODE_EXPIRY_MINUTES * 60 * 1000,
+    );
+
+    await this.twilioSmsService.sendVerificationCode(phoneNumber, code);
+
+    await this.usersRepository.update(userId, {
+      phoneNumber,
+      isPhoneVerified: false,
+      phoneVerificationCode: codeHash,
+      phoneVerificationCodeExpiresAt: expiresAt,
+      phoneVerificationAttempts: 0,
+      lastPhoneVerificationCodeSentAt: new Date(),
+    });
+
+    const response: SendPhoneVerificationCodeResponse = {
+      message: 'Verification code sent via SMS.',
+      phoneNumber,
+      isPhoneVerified: false,
+      expiresAt,
+    };
+    if (process.env.LOG_PHONE_VERIFICATION_CODE === 'true') {
+      (response as SendPhoneVerificationCodeResponse & { code?: string }).code = code;
+    }
+    return response;
+  }
+
+  async verifyPhoneVerificationCode(
+    userId: string,
+    dto: VerifyPhoneVerificationCodeDto,
+  ): Promise<VerifyPhoneVerificationCodeResponse> {
+    const user = (await this.usersRepository.findById(
+      userId,
+    )) as UserWithPhoneVerification | null;
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.phoneNumber) {
+      throw new BadRequestException(
+        'Add a phone number to your account for account recovery and to unlock email updates.',
+      );
+    }
+
+    if (user.isPhoneVerified) {
+      return {
+        message: 'Phone number is already verified.',
+        phoneNumber: user.phoneNumber,
+        isPhoneVerified: true,
+      };
+    }
+
+    if (
+      !user.phoneVerificationCode ||
+      !user.phoneVerificationCodeExpiresAt
+    ) {
+      throw new BadRequestException(
+        'No verification code found. Please request a new code.',
+      );
+    }
+
+    if ((user.phoneVerificationAttempts ?? 0) >= MAX_PHONE_VERIFICATION_ATTEMPTS) {
+      throw new HttpException(
+        'Too many failed attempts. Please request a new code.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    if (new Date() > user.phoneVerificationCodeExpiresAt) {
+      throw new BadRequestException(
+        'Verification code has expired. Please request a new code.',
+      );
+    }
+
+    const codeHash = this.hashCode(dto.code.trim());
+    const isCodeValid = crypto.timingSafeEqual(
+      Buffer.from(codeHash),
+      Buffer.from(user.phoneVerificationCode),
+    );
+
+    if (!isCodeValid) {
+      await this.usersRepository.incrementPhoneVerificationAttempts(user.id);
+      const remainingAttempts =
+        MAX_PHONE_VERIFICATION_ATTEMPTS -
+        (user.phoneVerificationAttempts ?? 0) -
+        1;
+      throw new BadRequestException(
+        `Invalid code. ${remainingAttempts} attempt${remainingAttempts !== 1 ? 's' : ''} remaining.`,
+      );
+    }
+
+    const updated = (await this.usersRepository.update(user.id, {
+      isPhoneVerified: true,
+      phoneVerificationCode: null,
+      phoneVerificationCodeExpiresAt: null,
+      phoneVerificationAttempts: 0,
+    })) as UserWithPhoneVerification;
+
+    return {
+      message: 'Phone number verified successfully.',
+      phoneNumber: (updated.phoneNumber ?? user.phoneNumber)!,
+      isPhoneVerified: true,
+    };
+  }
+
+  async completeOnboarding(
+    userId: string,
+    _dto: CompleteOnboardingDto,
+  ): Promise<CompleteOnboardingResponse> {
+    const user = await this.usersRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.hasCompletedOnboarding) {
+      await this.usersRepository.markOnboardingComplete(userId);
+    }
+
+    return {
+      message: 'Onboarding marked as complete',
+      hasCompletedOnboarding: true,
+    };
   }
 
   private hasProfileChanges(user: User, dto: UpdateProfileDto): boolean {
@@ -119,4 +377,29 @@ export class UsersService {
       recipientUserIds,
     });
   }
+
+  private generateVerificationCode(): string {
+    return crypto.randomInt(100000, 1000000).toString();
+  }
+
+  private hashCode(code: string): string {
+    return crypto.createHash('sha256').update(code).digest('hex');
+  }
+
+  private normalizePhoneNumber(phoneNumber: string): string | null {
+    const trimmed = phoneNumber.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const normalized = trimmed.replace(/[\s().-]/g, '');
+    if (!/^\+[1-9]\d{7,14}$/.test(normalized)) {
+      throw new BadRequestException(
+        'Phone number must be in E.164 format (example: +15551234567).',
+      );
+    }
+
+    return normalized;
+  }
+
 }

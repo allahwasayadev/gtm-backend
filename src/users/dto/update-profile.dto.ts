@@ -17,4 +17,8 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsBoolean()
   isOemSeller?: boolean;
+
+  @IsOptional()
+  @IsString()
+  phoneNumber?: string;
 }

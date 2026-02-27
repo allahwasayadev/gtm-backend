@@ -52,15 +52,7 @@ export class AuthService {
     const token = this.generateToken(user.id, user.email);
 
     return {
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        company: user.company,
-        isOemSeller: user.isOemSeller,
-        emailVerified: user.emailVerified,
-        createdAt: user.createdAt,
-      },
+      user: this.buildAuthUserResponse(user),
       token,
     };
   }
@@ -84,15 +76,7 @@ export class AuthService {
     const token = this.generateToken(user.id, user.email);
 
     return {
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        company: user.company,
-        isOemSeller: user.isOemSeller,
-        emailVerified: user.emailVerified,
-        createdAt: user.createdAt,
-      },
+      user: this.buildAuthUserResponse(user),
       token,
     };
   }
@@ -104,15 +88,7 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    return {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      company: user.company,
-      isOemSeller: user.isOemSeller,
-      emailVerified: user.emailVerified,
-      createdAt: user.createdAt,
-    };
+    return this.buildAuthUserResponse(user);
   }
 
   // Email Verification Methods
@@ -187,15 +163,7 @@ export class AuthService {
     const token = this.generateToken(user.id, user.email);
 
     return {
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        company: user.company,
-        isOemSeller: user.isOemSeller,
-        emailVerified: true,
-        createdAt: user.createdAt,
-      },
+      user: this.buildAuthUserResponse(user, { emailVerified: true }),
       token,
     };
   }
@@ -329,6 +297,24 @@ export class AuthService {
 
   private generateResetToken(): string {
     return crypto.randomBytes(32).toString('hex');
+  }
+
+  private buildAuthUserResponse(
+    user: any,
+    overrides?: { emailVerified?: boolean },
+  ) {
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      company: user.company,
+      isOemSeller: user.isOemSeller,
+      hasCompletedOnboarding: user.hasCompletedOnboarding,
+      emailVerified: overrides?.emailVerified ?? user.emailVerified,
+      phoneNumber: user.phoneNumber ?? null,
+      isPhoneVerified: Boolean(user.isPhoneVerified),
+      createdAt: user.createdAt,
+    };
   }
 
   private hashCode(code: string): string {

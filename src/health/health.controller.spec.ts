@@ -21,7 +21,7 @@ describe('HealthController', () => {
   it('should return health status with ok', () => {
     const result = controller.check();
     expect(result.status).toBe('ok');
-    expect(result.service).toBe('gtm-backend');
+    expect(result.service).toBe('ovrlap-backend');
     expect(result.timestamp).toBeDefined();
     expect(result.version).toBeDefined();
   });
