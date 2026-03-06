@@ -7,7 +7,7 @@ import {
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
-import type { User } from '@prisma/client';
+import type { User, UserRole } from '@prisma/client';
 import { JwtService } from '@nestjs/jwt';
 import * as crypto from 'crypto';
 import { UsersRepository } from './users.repository';
@@ -17,6 +17,7 @@ import {
   UpdateProfileDto,
   VerifyPhoneVerificationCodeDto,
 } from './dto';
+import { PrismaService } from '../prisma/prisma.service';
 import { ConnectionsRepository } from '../connections/connections.repository';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TwilioSmsService } from '../sms/twilio-sms.service';
@@ -39,7 +40,7 @@ export interface UpdatedProfileResponse {
   name: string;
   email: string;
   company: string | null;
-  isOemSeller: boolean;
+  roles: UserRole[];
   hasCompletedOnboarding: boolean;
   phoneNumber: string | null;
   isPhoneVerified: boolean;
@@ -72,6 +73,7 @@ export class UsersService {
   constructor(
     private usersRepository: UsersRepository,
     private jwtService: JwtService,
+    private prisma: PrismaService,
     private connectionsRepository: ConnectionsRepository,
     private notificationsService: NotificationsService,
     private twilioSmsService: TwilioSmsService,
@@ -90,7 +92,7 @@ export class UsersService {
       name: user.name,
       email: user.email,
       company: user.company,
-      isOemSeller: user.isOemSeller,
+      roles: user.roles ?? [],
       hasCompletedOnboarding: user.hasCompletedOnboarding,
       phoneNumber: user.phoneNumber,
       isPhoneVerified: Boolean(user.isPhoneVerified),
@@ -136,9 +138,7 @@ export class UsersService {
       ...(typeof dto.name === 'string' ? { name: dto.name } : {}),
       ...(typeof dto.email === 'string' ? { email: dto.email } : {}),
       ...(typeof dto.company === 'string' ? { company: dto.company } : {}),
-      ...(typeof dto.isOemSeller === 'boolean'
-        ? { isOemSeller: dto.isOemSeller }
-        : {}),
+      ...(Array.isArray(dto.roles) ? { roles: dto.roles } : {}),
     };
 
     if (typeof normalizedPhoneNumber !== 'undefined' && isPhoneNumberChanging) {
@@ -160,7 +160,7 @@ export class UsersService {
       name: updated.name,
       email: updated.email,
       company: updated.company,
-      isOemSeller: updated.isOemSeller,
+      roles: updated.roles ?? [],
       hasCompletedOnboarding: updated.hasCompletedOnboarding,
       phoneNumber: updated.phoneNumber ?? null,
       isPhoneVerified: Boolean(updated.isPhoneVerified),
@@ -351,14 +351,62 @@ export class UsersService {
     };
   }
 
+  async deleteAccount(userId: string): Promise<{ message: string }> {
+    const user = await this.usersRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    await this.usersRepository.delete(userId);
+    return { message: 'Account deleted successfully' };
+  }
+
+  async listAllForAdmin(): Promise<
+    { id: string; email: string; name: string; company: string | null; roles: UserRole[]; createdAt: Date }[]
+  > {
+    return this.usersRepository.findAllSafe();
+  }
+
+  async getAdminStats(): Promise<{
+    totalUsers: number;
+    totalLists: number;
+    totalMappings: number;
+    totalOverlaps: number;
+  }> {
+    const [totalUsers, totalLists, totalMappings, totalOverlaps] = await Promise.all([
+      this.prisma.user.count(),
+      this.prisma.accountList.count(),
+      (this.prisma as any).accountMatchDecision.count(),
+      (this.prisma as any).observedOverlapNotification.count(),
+    ]);
+    return { totalUsers, totalLists, totalMappings, totalOverlaps };
+  }
+
+  async deleteUserAsAdmin(adminUserId: string, targetUserId: string): Promise<{ message: string }> {
+    const admin = await this.usersRepository.findById(adminUserId);
+    if (!admin || !admin.roles?.includes('Admin')) {
+      throw new NotFoundException('Admin access required');
+    }
+    const target = await this.usersRepository.findById(targetUserId);
+    if (!target) {
+      throw new NotFoundException('User not found');
+    }
+    await this.usersRepository.delete(targetUserId);
+    return { message: 'User deleted successfully' };
+  }
+
   private hasProfileChanges(user: User, dto: UpdateProfileDto): boolean {
+    const currentRoles = [...(user.roles ?? [])].sort();
+    const dtoRoles = Array.isArray(dto.roles) ? [...dto.roles].sort() : null;
+    const rolesEqual =
+      dtoRoles === null ||
+      (dtoRoles.length === currentRoles.length &&
+        dtoRoles.every((r, i) => currentRoles[i] === r));
     return (
       (typeof dto.name === 'string' && dto.name !== user.name) ||
       (typeof dto.email === 'string' && dto.email !== user.email) ||
       (typeof dto.company === 'string' &&
         dto.company !== (user.company ?? '')) ||
-      (typeof dto.isOemSeller === 'boolean' &&
-        dto.isOemSeller !== user.isOemSeller)
+      (Array.isArray(dto.roles) && !rolesEqual)
     );
   }
 

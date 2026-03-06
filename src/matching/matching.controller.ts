@@ -145,7 +145,7 @@ export class MatchingController {
       }
 
       const partnerRelationshipType: PartnerRelationshipType =
-        otherUser.isOemSeller ? 'OEM' : 'RESELLER';
+        otherUser.roles?.includes('OEM') ? 'OEM' : 'RESELLER';
 
       return {
         connectionId: connection.id,
@@ -405,7 +405,7 @@ export class MatchingController {
         currentSharedCount,
       );
       connection.lastObservedSharedMatchCount = currentSharedCount;
-      return false;
+      return currentSharedCount > 0;
     }
 
     if (currentSharedCount === previousSharedCount) return false;

@@ -200,7 +200,7 @@ export class AccountListsService {
     if (previousSharedCount === null) {
       await this.connectionsRepository.updateLastObservedSharedMatchCount( connection.id, currentSharedCount );
       connection.lastObservedSharedMatchCount = currentSharedCount;
-      return false;
+      return currentSharedCount > 0;
     }
 
     if (currentSharedCount === previousSharedCount) return false;

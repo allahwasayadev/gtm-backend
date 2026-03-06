@@ -1,4 +1,5 @@
-import { IsBoolean, IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsEnum, IsOptional, IsString, MinLength, IsArray } from 'class-validator';
+import { UserRole } from '@prisma/client';
 
 export class UpdateProfileDto {
   @IsOptional()
@@ -15,8 +16,12 @@ export class UpdateProfileDto {
   company?: string;
 
   @IsOptional()
-  @IsBoolean()
-  isOemSeller?: boolean;
+  @IsArray()
+  @IsEnum(UserRole, {
+    each: true,
+    message: 'Each role must be Admin, OEM, or Reseller',
+  })
+  roles?: UserRole[];
 
   @IsOptional()
   @IsString()

@@ -3,18 +3,33 @@ import {
   Get,
   Patch,
   Post,
+  Delete,
   Body,
+  Param,
   UseGuards,
   Request,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CompleteOnboardingDto, SendPhoneVerificationCodeDto, UpdateProfileDto, VerifyPhoneVerificationCodeDto } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminAuthGuard } from '../auth/guards/admin-auth.guard';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)
 export class UsersController {
   constructor(private usersService: UsersService) {}
+
+  @Get()
+  @UseGuards(AdminAuthGuard)
+  async listUsers() {
+    return this.usersService.listAllForAdmin();
+  }
+
+  @Get('stats')
+  @UseGuards(AdminAuthGuard)
+  async getAdminStats() {
+    return this.usersService.getAdminStats();
+  }
 
   @Get('profile')
   async getProfile(@Request() req: any) {
@@ -54,5 +69,16 @@ export class UsersController {
       req.user.id,
       completeOnboardingDto,
     );
+  }
+
+  @Delete('profile')
+  async deleteAccount(@Request() req: any) {
+    return this.usersService.deleteAccount(req.user.id);
+  }
+
+  @Delete(':id')
+  @UseGuards(AdminAuthGuard)
+  async deleteUser(@Request() req: any, @Param('id') id: string) {
+    return this.usersService.deleteUserAsAdmin(req.user.id, id);
   }
 }

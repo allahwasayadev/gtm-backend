@@ -7,12 +7,18 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum UserRole {
+  Admin
+  OEM
+  Reseller
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
   name         String
   company      String?
-  isOemSeller  Boolean  @default(false)
+  roles        UserRole[] @default([])
   hasCompletedOnboarding Boolean @default(false)
   passwordHash String
   createdAt    DateTime @default(now())
@@ -168,7 +174,7 @@ model Invite {
   acceptedByUserId String?
 
   invitedBy   User  @relation("SentInvites", fields: [invitedByUserId], references: [id], onDelete: Cascade)
-  acceptedBy  User? @relation("AcceptedInvites", fields: [acceptedByUserId], references: [id])
+  acceptedBy  User? @relation("AcceptedInvites", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
 
   @@index([invitedByUserId])
   @@index([invitedEmail])

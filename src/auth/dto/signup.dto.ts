@@ -1,4 +1,5 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength, IsBoolean } from 'class-validator';
+import { IsEmail, IsEnum, IsNotEmpty, IsOptional, IsString, MinLength, IsArray, ArrayMinSize } from 'class-validator';
+import { UserRole } from '@prisma/client';
 
 export class SignupDto {
   @IsNotEmpty()
@@ -18,6 +19,11 @@ export class SignupDto {
   @IsString()
   company?: string;
 
-  @IsBoolean()
-  isOemSeller: boolean;
+  @IsArray()
+  @ArrayMinSize(1, { message: 'At least one role is required' })
+  @IsEnum(UserRole, {
+    each: true,
+    message: 'Each role must be Admin, OEM, or Reseller',
+  })
+  roles: UserRole[];
 }

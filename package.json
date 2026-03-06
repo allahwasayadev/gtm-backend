@@ -22,6 +22,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:seed": "ts-node prisma/seed.ts",
+    "add-admin": "ts-node prisma/add-admin.ts",
     "db:push": "prisma db push",
     "db:reset": "prisma migrate reset"
   },

@@ -36,13 +36,20 @@ export class AuthService {
       throw new ConflictException('Email already in use');
     }
 
+    const hasAdminRole = signupDto.roles?.some((r) => r === 'Admin');
+    if (hasAdminRole) {
+      throw new BadRequestException(
+        'Admin role cannot be self-assigned; it is assigned separately.',
+      );
+    }
+
     const passwordHash = await bcrypt.hash(signupDto.password, 10);
 
     const user = await this.authRepository.createUser({
       name: signupDto.name,
       email: signupDto.email,
       passwordHash: passwordHash,
-      isOemSeller: signupDto.isOemSeller,
+      roles: signupDto.roles,
       ...(signupDto.company && { company: signupDto.company }),
     });
 
@@ -308,7 +315,7 @@ export class AuthService {
       name: user.name,
       email: user.email,
       company: user.company,
-      isOemSeller: user.isOemSeller,
+      roles: user.roles ?? [],
       hasCompletedOnboarding: user.hasCompletedOnboarding,
       emailVerified: overrides?.emailVerified ?? user.emailVerified,
       phoneNumber: user.phoneNumber ?? null,
