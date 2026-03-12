@@ -1,0 +1,26 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: gtm
+      POSTGRES_PASSWORD: gtm_local
+      POSTGRES_DB: gtm_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  api:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://gtm:gtm_local@db:5432/gtm_db?schema=public
+      PORT: "3001"
+      JWT_SECRET: local-dev-secret
+      FRONTEND_URL: http://localhost:3000
+    depends_on:
+      - db
+
+volumes:
+  pgdata:

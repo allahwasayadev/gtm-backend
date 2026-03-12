@@ -1,0 +1,150 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  GTM Backend - Database stack.
+  RDS PostgreSQL single-AZ in private subnets.
+  DB credentials stored in Secrets Manager and auto-generated.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: gtm
+    AllowedPattern: "[a-z0-9-]+"
+
+  DBName:
+    Type: String
+    Default: gtm_db
+    AllowedPattern: "[a-zA-Z_][a-zA-Z0-9_]*"
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    AllowedValues:
+      - db.t4g.micro
+      - db.t3.micro
+
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 100
+
+Resources:
+  # ──────────────────────────────────────────────
+  #  DB credentials (auto-generated)
+  # ──────────────────────────────────────────────
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${EnvironmentName}/db-credentials"
+      Description: RDS master credentials for GTM backend
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "gtmadmin"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  # ──────────────────────────────────────────────
+  #  Security group - only EC2 SG can connect
+  # ──────────────────────────────────────────────
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow PostgreSQL from EC2 security group only
+      VpcId: !ImportValue
+        Fn::Sub: "${EnvironmentName}-VpcId"
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-db-sg"
+
+  # Ingress rule added separately so compute.yaml can reference this SG
+  # and this template can exist before compute. The actual ingress is in
+  # compute.yaml via DBIngressFromEC2.
+
+  # ──────────────────────────────────────────────
+  #  Subnet group
+  # ──────────────────────────────────────────────
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for RDS
+      SubnetIds:
+        - !ImportValue
+          Fn::Sub: "${EnvironmentName}-PrivateSubnetAId"
+        - !ImportValue
+          Fn::Sub: "${EnvironmentName}-PrivateSubnetBId"
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-db-subnet-group"
+
+  # ──────────────────────────────────────────────
+  #  RDS instance
+  # ──────────────────────────────────────────────
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "${EnvironmentName}-postgres"
+      Engine: postgres
+      EngineVersion: "16.4"
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp3
+      DBName: !Ref DBName
+
+      MasterUsername: !Sub "{{resolve:secretsmanager:${DBSecret}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DBSecret}:SecretString:password}}"
+
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DBSecurityGroup
+      PubliclyAccessible: false
+      MultiAZ: false
+
+      BackupRetentionPeriod: 1
+      PreferredBackupWindow: "03:00-04:00"
+      PreferredMaintenanceWindow: "sun:04:30-sun:05:30"
+      CopyTagsToSnapshot: true
+      StorageEncrypted: true
+      DeletionProtection: false
+
+      EnablePerformanceInsights: false
+      MonitoringInterval: 0
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-postgres"
+
+  # Attach the secret to the RDS instance for rotation support
+  DBSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DBSecret
+      TargetId: !Ref DBInstance
+      TargetType: AWS::RDS::DBInstance
+
+Outputs:
+  DBEndpoint:
+    Value: !GetAtt DBInstance.Endpoint.Address
+    Export:
+      Name: !Sub "${EnvironmentName}-DBEndpoint"
+
+  DBPort:
+    Value: !GetAtt DBInstance.Endpoint.Port
+    Export:
+      Name: !Sub "${EnvironmentName}-DBPort"
+
+  DBSecretArn:
+    Value: !Ref DBSecret
+    Export:
+      Name: !Sub "${EnvironmentName}-DBSecretArn"
+
+  DBSecurityGroupId:
+    Value: !GetAtt DBSecurityGroup.GroupId
+    Export:
+      Name: !Sub "${EnvironmentName}-DBSecurityGroupId"
+
+  DBName:
+    Value: !Ref DBName
+    Export:
+      Name: !Sub "${EnvironmentName}-DBName"
