@@ -366,15 +366,27 @@ function evaluateCandidateMatch(
     return { confidence, matchType: 'auto' };
   }
 
-  const relaxedPasses = passesSuggestionGuardRelaxed(yourNormalized, theirNormalized, tokenScores, jw, sharedTokenLength);
+  const relaxedPasses = passesSuggestionGuardRelaxed(
+    yourNormalized,
+    theirNormalized,
+    tokenScores,
+    jw,
+    sharedTokenLength,
+  );
   const suggestThreshold =
-    suggestionBypass && relaxedPasses ? 0.80 : SUGGEST_MIN_THRESHOLD;
+    suggestionBypass && relaxedPasses ? 0.8 : SUGGEST_MIN_THRESHOLD;
+
+  const highConfidenceFallback =
+    jw >= 0.92 &&
+    tokenScores.overlapCount >= 1 &&
+    tokenScores.tokenContainment >= 0.5;
 
   if (
     confidence >= suggestThreshold &&
     confidence <= SUGGEST_MAX_THRESHOLD &&
     (passesSuggestionGuard(yourNormalized, theirNormalized, tokenScores, jw) ||
-      (suggestionBypass && relaxedPasses))
+      (suggestionBypass && relaxedPasses) ||
+      highConfidenceFallback)
   ) {
     return { confidence, matchType: 'suggested' };
   }
@@ -612,9 +624,7 @@ function evaluateContainedBrandTokenMatch(
   }
   const isTrailingBrand = brandTokenIndex === longTokens.length - 1;
   const isAmazonStyleDotComVariant =
-    longTokens.length === 2 &&
-    brandTokenIndex === 0 &&
-    longTokens[1] === 'com';
+    longTokens.length === 2 && brandTokenIndex === 0 && longTokens[1] === 'com';
 
   if (!isTrailingBrand && !isAmazonStyleDotComVariant) {
     return { confidence: 0, matchType: null };
@@ -650,7 +660,13 @@ function passesSuggestionGuard(
   return true;
 }
 
-function passesSuggestionGuardRelaxed(yourNormalized: string, theirNormalized: string, tokenScores: TokenScores, jw: number, sharedTokenLength: number): boolean {
+function passesSuggestionGuardRelaxed(
+  yourNormalized: string,
+  theirNormalized: string,
+  tokenScores: TokenScores,
+  jw: number,
+  sharedTokenLength: number,
+): boolean {
   if (jw < 0.85) {
     return false;
   }
