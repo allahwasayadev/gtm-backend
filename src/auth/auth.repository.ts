@@ -18,6 +18,7 @@ export class AuthRepository {
     passwordHash: string;
     company?: string;
     roles: UserRole[];
+    phoneNumber?: string;
   }): Promise<User> {
     return this.prisma.user.create({
       data,
@@ -111,6 +112,47 @@ export class AuthRepository {
       where: { id: userId },
       data: {
         passwordResetAttempts: { increment: 1 },
+      },
+    });
+  }
+
+  // Phone verification methods
+  async updatePhoneVerification(
+    userId: string,
+    data: {
+      phoneNumber?: string;
+      isPhoneVerified?: boolean;
+      phoneVerificationCode?: string | null;
+      phoneVerificationCodeExpiresAt?: Date | null;
+      phoneVerificationAttempts?: number;
+      lastPhoneVerificationCodeSentAt?: Date;
+      phoneVerificationSendCount?: number;
+      phoneVerificationSendWindowStart?: Date;
+    },
+  ): Promise<User> {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data,
+    });
+  }
+
+  async setPhoneVerified(userId: string): Promise<User> {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        isPhoneVerified: true,
+        phoneVerificationCode: null,
+        phoneVerificationCodeExpiresAt: null,
+        phoneVerificationAttempts: 0,
+      },
+    });
+  }
+
+  async incrementPhoneVerificationAttempts(userId: string): Promise<User> {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        phoneVerificationAttempts: { increment: 1 },
       },
     });
   }

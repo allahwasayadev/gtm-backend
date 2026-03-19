@@ -5,12 +5,14 @@ import {
   BadRequestException,
   HttpException,
   HttpStatus,
+  Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { AuthRepository } from './auth.repository';
 import { EmailService } from '../email/email.service';
+import { TwilioSmsService } from '../sms/twilio-sms.service';
 import { SignupDto, LoginDto } from './dto';
 
 const VERIFICATION_CODE_EXPIRY_MINUTES = 15;
@@ -19,12 +21,22 @@ const RESEND_COOLDOWN_SECONDS = 60;
 const MAX_VERIFICATION_ATTEMPTS = 5;
 const MAX_PASSWORD_RESET_ATTEMPTS = 5;
 
+// Phone verification constants
+const PHONE_CODE_EXPIRY_MINUTES = 10;
+const PHONE_RESEND_COOLDOWN_SECONDS = 60;
+const MAX_PHONE_VERIFICATION_ATTEMPTS = 5;
+const MAX_PHONE_SENDS_PER_HOUR = 5;
+const PHONE_SEND_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private authRepository: AuthRepository,
     private jwtService: JwtService,
     private emailService: EmailService,
+    private twilioSmsService: TwilioSmsService,
   ) {}
 
   async signup(signupDto: SignupDto) {
@@ -45,12 +57,18 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(signupDto.password, 10);
 
+    // Normalize phone number if provided
+    const phoneNumber = signupDto.phoneNumber
+      ? this.normalizePhoneNumber(signupDto.phoneNumber)
+      : null;
+
     const user = await this.authRepository.createUser({
       name: signupDto.name,
       email: signupDto.email,
       passwordHash: passwordHash,
       roles: signupDto.roles,
       ...(signupDto.company && { company: signupDto.company }),
+      ...(phoneNumber && { phoneNumber }),
     });
 
     // Initiate email verification
@@ -289,6 +307,147 @@ export class AuthService {
     return { message: 'Your password has been reset successfully.' };
   }
 
+  // Phone Verification Methods (signup flow)
+  async sendPhoneVerificationCode(userId: string, phoneNumber: string) {
+    const user = await this.authRepository.findUserById(userId);
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const normalized = this.normalizePhoneNumber(phoneNumber);
+    if (!normalized) {
+      throw new BadRequestException('Phone number is required');
+    }
+
+    // Already verified with this number
+    if ((user as any).isPhoneVerified && (user as any).phoneNumber === normalized) {
+      return {
+        message: 'Phone number is already verified.',
+        phoneNumber: normalized,
+        isPhoneVerified: true,
+      };
+    }
+
+    // Resend cooldown
+    const lastSent = (user as any).lastPhoneVerificationCodeSentAt;
+    if (lastSent) {
+      const elapsed = (Date.now() - new Date(lastSent).getTime()) / 1000;
+      if (elapsed < PHONE_RESEND_COOLDOWN_SECONDS) {
+        const wait = Math.ceil(PHONE_RESEND_COOLDOWN_SECONDS - elapsed);
+        throw new HttpException(
+          `Please wait ${wait} seconds before requesting a new code.`,
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+    }
+
+    // Hourly send limit
+    const sendCount = (user as any).phoneVerificationSendCount ?? 0;
+    const windowStart = (user as any).phoneVerificationSendWindowStart;
+    const windowExpired = !windowStart || Date.now() - new Date(windowStart).getTime() > PHONE_SEND_WINDOW_MS;
+
+    if (!windowExpired && sendCount >= MAX_PHONE_SENDS_PER_HOUR) {
+      throw new HttpException(
+        'Too many verification codes requested. Please try again later.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const code = this.generateVerificationCode();
+    const codeHash = this.hashCode(code);
+    const expiresAt = new Date(Date.now() + PHONE_CODE_EXPIRY_MINUTES * 60 * 1000);
+
+    await this.twilioSmsService.sendVerificationCode(normalized, code);
+
+    await this.authRepository.updatePhoneVerification(userId, {
+      phoneNumber: normalized,
+      isPhoneVerified: false,
+      phoneVerificationCode: codeHash,
+      phoneVerificationCodeExpiresAt: expiresAt,
+      phoneVerificationAttempts: 0,
+      lastPhoneVerificationCodeSentAt: new Date(),
+      phoneVerificationSendCount: windowExpired ? 1 : sendCount + 1,
+      phoneVerificationSendWindowStart: windowExpired ? new Date() : undefined,
+    });
+
+    const response: any = {
+      message: 'Verification code sent via SMS.',
+      phoneNumber: normalized,
+      isPhoneVerified: false,
+      expiresAt,
+    };
+    if (process.env.LOG_PHONE_VERIFICATION_CODE === 'true') {
+      response.code = code;
+    }
+    return response;
+  }
+
+  async verifyPhoneCode(userId: string, code: string) {
+    const user = await this.authRepository.findUserById(userId);
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    if (!(user as any).phoneNumber) {
+      throw new BadRequestException('No phone number on file. Please send a verification code first.');
+    }
+
+    if ((user as any).isPhoneVerified) {
+      const token = this.generateToken(user.id, user.email);
+      return {
+        user: this.buildAuthUserResponse(user, { isPhoneVerified: true }),
+        token,
+      };
+    }
+
+    if (!(user as any).phoneVerificationCode || !(user as any).phoneVerificationCodeExpiresAt) {
+      throw new BadRequestException('No verification code found. Please request a new one.');
+    }
+
+    if (((user as any).phoneVerificationAttempts ?? 0) >= MAX_PHONE_VERIFICATION_ATTEMPTS) {
+      throw new HttpException(
+        'Too many failed attempts. Please request a new code.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    if (new Date() > (user as any).phoneVerificationCodeExpiresAt) {
+      throw new BadRequestException('Verification code has expired. Please request a new one.');
+    }
+
+    const codeHash = this.hashCode(code.trim());
+    const isCodeValid = crypto.timingSafeEqual(
+      Buffer.from(codeHash),
+      Buffer.from((user as any).phoneVerificationCode),
+    );
+
+    if (!isCodeValid) {
+      await this.authRepository.incrementPhoneVerificationAttempts(userId);
+      const remaining = MAX_PHONE_VERIFICATION_ATTEMPTS - ((user as any).phoneVerificationAttempts ?? 0) - 1;
+      throw new BadRequestException(
+        `Invalid code. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.`,
+      );
+    }
+
+    await this.authRepository.setPhoneVerified(userId);
+
+    const token = this.generateToken(user.id, user.email);
+    return {
+      user: this.buildAuthUserResponse(user, { isPhoneVerified: true }),
+      token,
+    };
+  }
+
+  private normalizePhoneNumber(phoneNumber: string): string | null {
+    const trimmed = phoneNumber.trim();
+    if (!trimmed) return null;
+    const normalized = trimmed.replace(/[\s().-]/g, '');
+    if (!/^\+[1-9]\d{7,14}$/.test(normalized)) {
+      throw new BadRequestException('Phone number must be in E.164 format (example: +15551234567).');
+    }
+    return normalized;
+  }
+
   // Helper Methods
   private generateToken(userId: string, email: string): string {
     return this.jwtService.sign({
@@ -308,7 +467,7 @@ export class AuthService {
 
   private buildAuthUserResponse(
     user: any,
-    overrides?: { emailVerified?: boolean },
+    overrides?: { emailVerified?: boolean; isPhoneVerified?: boolean },
   ) {
     return {
       id: user.id,
@@ -319,7 +478,7 @@ export class AuthService {
       hasCompletedOnboarding: user.hasCompletedOnboarding,
       emailVerified: overrides?.emailVerified ?? user.emailVerified,
       phoneNumber: user.phoneNumber ?? null,
-      isPhoneVerified: Boolean(user.isPhoneVerified),
+      isPhoneVerified: overrides?.isPhoneVerified ?? Boolean(user.isPhoneVerified),
       createdAt: user.createdAt,
     };
   }

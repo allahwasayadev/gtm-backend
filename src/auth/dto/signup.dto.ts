@@ -26,4 +26,8 @@ export class SignupDto {
     message: 'Each role must be Admin, OEM, or Reseller',
   })
   roles: UserRole[];
+
+  @IsOptional()
+  @IsString()
+  phoneNumber?: string;
 }

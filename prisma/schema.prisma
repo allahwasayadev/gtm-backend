@@ -38,6 +38,9 @@ model User {
   phoneVerificationCodeExpiresAt DateTime?
   phoneVerificationAttempts      Int       @default(0)
   lastPhoneVerificationCodeSentAt DateTime?
+  smsOptedOut                    Boolean   @default(false)
+  phoneVerificationSendCount     Int       @default(0)
+  phoneVerificationSendWindowStart DateTime?
 
   // Password reset
   passwordResetToken             String?
