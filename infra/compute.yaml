@@ -189,6 +189,9 @@ Resources:
               command: usermod -aG docker ec2-user
             03_install_certbot:
               command: |
+                # pip install fails on AL2023 (externally-managed environment); the dnf
+                # fallback is what actually installs certbot, and it also provides
+                # /usr/lib/systemd/system/certbot-renew.timer used by setup-tls.sh.
                 python3 -m pip install certbot certbot-nginx 2>/dev/null || dnf install -y certbot python3-certbot-nginx
 
         configure_nginx:
@@ -364,10 +367,23 @@ Resources:
                 # Reload nginx with SSL
                 nginx -t && systemctl reload nginx
 
-                # Auto-renew cron
-                mkdir -p /etc/cron.d
-                echo "0 3 * * * root certbot renew --quiet --post-hook 'systemctl reload nginx'" \
-                  > /etc/cron.d/certbot-renew
+                # Safe renewal deploy hook: validate nginx config, reload ONLY if valid.
+                # Exits non-zero (skipping the reload) when nginx -t fails.
+                mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+                printf '%s\n' \
+                  '#!/bin/bash' \
+                  'set -euo pipefail' \
+                  '/usr/sbin/nginx -t' \
+                  '/usr/bin/systemctl reload nginx' \
+                  > /etc/letsencrypt/renewal-hooks/deploy/00-reload-nginx.sh
+                chown root:root /etc/letsencrypt/renewal-hooks/deploy/00-reload-nginx.sh
+                chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/00-reload-nginx.sh
+
+                # Automatic renewal via the certbot RPM's own systemd timer.
+                # NOTE: Amazon Linux 2023 ships NO cron daemon - /etc/cron.d is never
+                # read, so the previous cron-based approach silently never ran.
+                systemctl enable --now certbot-renew.timer
+                systemctl is-active --quiet certbot-renew.timer
               mode: "000755"
 
             /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json:
@@ -388,6 +404,19 @@ Resources:
                             "log_group_name": "/gtm/${EnvironmentName}/nginx",
                             "log_stream_name": "{instance_id}/error",
                             "retention_in_days": 7
+                          },
+                          {
+                            "file_path": "/var/log/letsencrypt/letsencrypt.log",
+                            "log_group_name": "/gtm/${EnvironmentName}/certbot",
+                            "log_stream_name": "{instance_id}/renewal",
+                            "retention_in_days": 90,
+                            "filters": [
+                              { "type": "exclude", "expression": "\"signature\"" },
+                              { "type": "exclude", "expression": "\"jwk\"" },
+                              { "type": "exclude", "expression": "\"protected\"" },
+                              { "type": "exclude", "expression": "BEGIN CERTIFICATE" },
+                              { "type": "exclude", "expression": "^[A-Za-z0-9+/=_-]{64,}$" }
+                            ]
                           }
                         ]
                       }
