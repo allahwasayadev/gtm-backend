@@ -337,7 +337,7 @@ Resources:
                   -e TWILIO_PHONE_NUMBER="$TWILIO_PHONE_NUMBER" \
                   -e TWILIO_MESSAGING_SERVICE_SID="$TWILIO_MESSAGING_SERVICE_SID" \
                   "$ECR_IMAGE" \
-                  sh -c "npx prisma db push && node dist/main.js"
+                  sh -c "npx prisma db push && node dist/src/main.js"
 
                 echo "Deploy complete: $ECR_IMAGE"
               mode: "000755"
