@@ -1,5 +1,7 @@
 # ---------- Stage 1: install + build ----------
-FROM node:20-alpine AS builder
+# Base pinned to the exact version already present in ECR so unchanged base
+# layers are reused on push. Bump deliberately, not implicitly via :20-alpine.
+FROM node:20.20.1-alpine AS builder
 WORKDIR /app
 
 RUN apk add --no-cache openssl
@@ -18,7 +20,7 @@ RUN npm run build
 RUN npm prune --production
 
 # ---------- Stage 2: production image ----------
-FROM node:20-alpine AS runner
+FROM node:20.20.1-alpine AS runner
 WORKDIR /app
 
 RUN apk add --no-cache openssl tini
