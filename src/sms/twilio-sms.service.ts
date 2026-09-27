@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { getTwilioSmsConfig, TwilioSmsConfig } from './twilio.config';
 import { isTestNumber } from './sms-test-mode';
+import { isUsableIdentifier, isUsableSecret } from './twilio-credentials';
 
 @Injectable()
 export class TwilioSmsService {
@@ -86,11 +87,23 @@ export class TwilioSmsService {
   }
 
   private assertConfigured(config: TwilioSmsConfig): void {
+    // Placeholder values (production has shipped the literal "none") must be
+    // treated as unconfigured. Otherwise the app builds a request against
+    // /Accounts/none/Messages.json and reports a confusing upstream failure
+    // instead of an honest configuration error.
+    const hasSender =
+      isUsableIdentifier(config.messagingServiceSid) ||
+      isUsableIdentifier(config.fromPhoneNumber);
+
     if (
-      !config.accountSid ||
-      !config.authToken ||
-      (!config.fromPhoneNumber && !config.messagingServiceSid)
+      !isUsableIdentifier(config.accountSid) ||
+      !isUsableSecret(config.authToken) ||
+      !hasSender
     ) {
+      this.logger.error(
+        'Twilio SMS is not configured: one or more credentials are missing ' +
+          'or set to a placeholder value.',
+      );
       throw new InternalServerErrorException(
         'Twilio SMS service is not configured',
       );

@@ -8,6 +8,7 @@ import {
 import * as crypto from 'crypto';
 import type { Request } from 'express';
 import { getTwilioSmsConfig } from './twilio.config';
+import { isUsableSecret } from './twilio-credentials';
 
 /** The subset of the inbound request the signature covers. */
 type SignedRequest = Omit<Request, 'body'> & {
@@ -33,11 +34,14 @@ export class TwilioSignatureGuard implements CanActivate {
     const req = context.switchToHttp().getRequest<SignedRequest>();
     const { authToken } = getTwilioSmsConfig();
 
-    if (!authToken) {
+    if (!isUsableSecret(authToken)) {
       // Fail closed. An unvalidatable webhook is worse than a rejected one.
+      // This also covers placeholder values such as the literal "none" that
+      // production has shipped: treating those as an HMAC key would let anyone
+      // who guessed the placeholder forge a signed request.
       this.logger.error(
-        'Inbound SMS webhook rejected: TWILIO_AUTH_TOKEN is not configured, ' +
-          'so the signature cannot be validated.',
+        'Inbound SMS webhook rejected: TWILIO_AUTH_TOKEN is missing or is a ' +
+          'placeholder, so the signature cannot be validated.',
       );
       throw new ForbiddenException('Webhook signature validation unavailable');
     }
