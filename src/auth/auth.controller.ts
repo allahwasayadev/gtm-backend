@@ -24,8 +24,15 @@ export class AuthController {
   constructor(private authService: AuthService) {}
 
   @Post('signup')
-  async signup(@Body() signupDto: SignupDto) {
-    return this.authService.signup(signupDto);
+  async signup(@Body() signupDto: SignupDto, @Request() req: any) {
+    // Captured alongside the consent record so it can be produced on request.
+    return this.authService.signup(signupDto, {
+      ipAddress:
+        (req.headers?.['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+        req.ip ||
+        null,
+      userAgent: (req.headers?.['user-agent'] as string) ?? null,
+    });
   }
 
   @Post('login')

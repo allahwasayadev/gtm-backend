@@ -49,7 +49,13 @@ export class UsersController {
     @Request() req: any,
     @Body() dto: SendPhoneVerificationCodeDto,
   ) {
-    return this.usersService.sendPhoneVerificationCode(req.user.id, dto);
+    return this.usersService.sendPhoneVerificationCode(req.user.id, dto, {
+      ipAddress:
+        (req.headers?.['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+        req.ip ||
+        null,
+      userAgent: (req.headers?.['user-agent'] as string) ?? null,
+    });
   }
 
   @Post('profile/phone-verification/verify')
@@ -58,6 +64,12 @@ export class UsersController {
     @Body() dto: VerifyPhoneVerificationCodeDto,
   ) {
     return this.usersService.verifyPhoneVerificationCode(req.user.id, dto);
+  }
+
+  /** Withdraw SMS consent from profile settings. */
+  @Post('profile/sms-consent/withdraw')
+  async withdrawSmsConsent(@Request() req: any) {
+    return this.usersService.withdrawSmsConsent(req.user.id);
   }
 
   @Patch('onboarding/complete')

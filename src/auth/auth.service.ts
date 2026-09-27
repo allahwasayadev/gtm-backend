@@ -13,6 +13,9 @@ import * as crypto from 'crypto';
 import { AuthRepository } from './auth.repository';
 import { EmailService } from '../email/email.service';
 import { TwilioSmsService } from '../sms/twilio-sms.service';
+import { SmsConsentService } from '../sms/sms-consent.service';
+import { SmsConsentSource } from '../sms/sms-consent.constants';
+import { testCodeFor } from '../sms/sms-test-mode';
 import { SignupDto, LoginDto } from './dto';
 
 const VERIFICATION_CODE_EXPIRY_MINUTES = 15;
@@ -37,9 +40,13 @@ export class AuthService {
     private jwtService: JwtService,
     private emailService: EmailService,
     private twilioSmsService: TwilioSmsService,
+    private smsConsentService: SmsConsentService,
   ) {}
 
-  async signup(signupDto: SignupDto) {
+  async signup(
+    signupDto: SignupDto,
+    requestContext?: { ipAddress?: string | null; userAgent?: string | null },
+  ) {
     const existingUser = await this.authRepository.findUserByEmail(
       signupDto.email,
     );
@@ -70,6 +77,16 @@ export class AuthService {
       ...(signupDto.company && { company: signupDto.company }),
       ...(phoneNumber && { phoneNumber }),
     });
+
+    // Record SMS consent when given. Consent is optional: an account is
+    // created either way, and nothing is sent without a record here.
+    if (signupDto.smsConsent === true && phoneNumber) {
+      await this.smsConsentService.recordConsent(user.id, phoneNumber, {
+        source: SmsConsentSource.SignupForm,
+        ipAddress: requestContext?.ipAddress,
+        userAgent: requestContext?.userAgent,
+      });
+    }
 
     // Initiate email verification
     await this.initiateEmailVerification(user.id, user.email, user.name);
@@ -353,7 +370,11 @@ export class AuthService {
       );
     }
 
-    const code = this.generateVerificationCode();
+    // Consent gate. Nothing is sent to a number that has not opted in, or
+    // that has since replied STOP.
+    await this.smsConsentService.assertMaySend(userId, normalized);
+
+    const code = testCodeFor(normalized) ?? this.generateVerificationCode();
     const codeHash = this.hashCode(code);
     const expiresAt = new Date(Date.now() + PHONE_CODE_EXPIRY_MINUTES * 60 * 1000);
 
@@ -376,7 +397,10 @@ export class AuthService {
       isPhoneVerified: false,
       expiresAt,
     };
-    if (process.env.LOG_PHONE_VERIFICATION_CODE === 'true') {
+    if (
+      process.env.LOG_PHONE_VERIFICATION_CODE === 'true' &&
+      process.env.NODE_ENV !== 'production'
+    ) {
       response.code = code;
     }
     return response;
@@ -479,6 +503,9 @@ export class AuthService {
       emailVerified: overrides?.emailVerified ?? user.emailVerified,
       phoneNumber: user.phoneNumber ?? null,
       isPhoneVerified: overrides?.isPhoneVerified ?? Boolean(user.isPhoneVerified),
+      smsConsent: Boolean(user.smsConsent),
+      smsConsentAt: user.smsConsentAt ?? null,
+      smsOptedOut: Boolean(user.smsOptedOut),
       createdAt: user.createdAt,
     };
   }

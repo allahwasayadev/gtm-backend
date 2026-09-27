@@ -38,9 +38,16 @@ model User {
   phoneVerificationCodeExpiresAt DateTime?
   phoneVerificationAttempts      Int       @default(0)
   lastPhoneVerificationCodeSentAt DateTime?
-  smsOptedOut                    Boolean   @default(false)
   phoneVerificationSendCount     Int       @default(0)
   phoneVerificationSendWindowStart DateTime?
+
+  // SMS consent (A2P 10DLC). Current state; full audit trail in SmsConsentEvent.
+  smsConsent                     Boolean   @default(false)
+  smsConsentAt                   DateTime?
+  smsConsentSource               String?
+  smsConsentVersion              String?
+  smsOptedOut                    Boolean   @default(false)
+  smsOptedOutAt                  DateTime?
 
   // Password reset
   passwordResetToken             String?
@@ -55,6 +62,7 @@ model User {
   acceptedInvites    Invite[]     @relation("AcceptedInvites")
   notifications       Notification[]
   observedOverlapNotifications ObservedOverlapNotification[]
+  smsConsentEvents    SmsConsentEvent[]
 
   @@map("users")
 }
@@ -183,4 +191,39 @@ model Invite {
   @@index([invitedEmail])
   @@index([tokenHash])
   @@map("invites")
+}
+
+/// Immutable audit trail of every SMS consent grant / revocation.
+/// This is the record produced for an A2P 10DLC consent-proof request:
+/// who consented, to what exact wording, from where, and when.
+enum SmsConsentAction {
+  granted
+  revoked
+  resubscribed
+}
+
+model SmsConsentEvent {
+  id          String   @id @default(cuid())
+  userId      String?
+  phoneNumber String
+  action      SmsConsentAction
+  /// Verbatim wording displayed to the user at the moment of consent.
+  consentText String?
+  /// Version identifier of that wording, so it can be reproduced later.
+  consentVersion String?
+  /// Where consent was captured, e.g. "signup_form", "verify_phone_screen",
+  /// "profile_settings", or "sms_keyword_stop".
+  source      String
+  /// Use case the consent covers. Ovrlap sends only account-security messages.
+  useCase     String   @default("account_verification")
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([phoneNumber])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("sms_consent_events")
 }

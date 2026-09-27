@@ -1,4 +1,14 @@
-import { IsEmail, IsEnum, IsNotEmpty, IsOptional, IsString, MinLength, IsArray, ArrayMinSize } from 'class-validator';
+import {
+  ArrayMinSize,
+  IsArray,
+  IsBoolean,
+  IsEmail,
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MinLength,
+} from 'class-validator';
 import { UserRole } from '@prisma/client';
 
 export class SignupDto {
@@ -30,4 +40,13 @@ export class SignupDto {
   @IsOptional()
   @IsString()
   phoneNumber?: string;
+
+  /**
+   * SMS consent (A2P 10DLC). Optional by design: declining must not prevent
+   * account creation. When true, an SmsConsentEvent is written with the
+   * timestamp, source and verbatim wording shown.
+   */
+  @IsOptional()
+  @IsBoolean()
+  smsConsent?: boolean;
 }
