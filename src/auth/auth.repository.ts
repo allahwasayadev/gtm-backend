@@ -38,7 +38,7 @@ export class AuthRepository {
       emailVerificationCode?: string | null;
       emailVerificationCodeExpiresAt?: Date | null;
       emailVerificationAttempts?: number;
-      lastVerificationCodeSentAt?: Date;
+      lastVerificationCodeSentAt?: Date | null;
     },
   ): Promise<User> {
     return this.prisma.user.update({

@@ -89,13 +89,20 @@ export class AuthService {
     }
 
     // Initiate email verification
-    await this.initiateEmailVerification(user.id, user.email, user.name);
+    const emailVerificationSent = await this.initiateEmailVerification(
+      user.id,
+      user.email,
+      user.name,
+    );
 
     const token = this.generateToken(user.id, user.email);
 
+    // The account exists either way; the client uses this to decide whether to
+    // say "we sent you a code" or to offer resend instead of a false promise.
     return {
       user: this.buildAuthUserResponse(user),
       token,
+      emailVerificationSent,
     };
   }
 
@@ -134,11 +141,24 @@ export class AuthService {
   }
 
   // Email Verification Methods
+  /**
+   * Issues a fresh code and tries to deliver it.
+   *
+   * Returns whether the email actually went out. Callers MUST NOT tell the user
+   * a code was sent without checking this: sendVerificationEmail swallows SMTP
+   * failures and returns false, and claiming delivery that did not happen leaves
+   * the user waiting for a mail that will never arrive.
+   *
+   * On failure the cooldown stamp is cleared so the account stays recoverable —
+   * otherwise a send that never left the building would still block resend for
+   * RESEND_COOLDOWN_SECONDS. The code itself is left in place: it is valid, and a
+   * later successful resend simply replaces it.
+   */
   async initiateEmailVerification(
     userId: string,
     email: string,
     userName: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const code = this.generateVerificationCode();
     const codeHash = this.hashCode(code);
     const expiresAt = new Date(
@@ -152,7 +172,22 @@ export class AuthService {
       lastVerificationCodeSentAt: new Date(),
     });
 
-    await this.emailService.sendVerificationEmail(email, userName, code);
+    const sent = await this.emailService.sendVerificationEmail(
+      email,
+      userName,
+      code,
+    );
+
+    if (!sent) {
+      await this.authRepository.updateEmailVerification(userId, {
+        lastVerificationCodeSentAt: null,
+      });
+      this.logger.error(
+        `Verification email could not be delivered to ${email}; cooldown cleared so the user can retry.`,
+      );
+    }
+
+    return sent;
   }
 
   async verifyEmail(email: string, code: string) {
@@ -235,7 +270,20 @@ export class AuthService {
       }
     }
 
-    await this.initiateEmailVerification(user.id, user.email, user.name);
+    const sent = await this.initiateEmailVerification(
+      user.id,
+      user.email,
+      user.name,
+    );
+
+    if (!sent) {
+      // Honest failure. The cooldown was cleared in initiateEmailVerification,
+      // so the user can try again straight away.
+      throw new HttpException(
+        'We could not send the verification email just now. Please try again in a moment.',
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
 
     return { message: 'A new verification code has been sent to your email.' };
   }
