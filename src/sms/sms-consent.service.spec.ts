@@ -166,6 +166,33 @@ describe('SmsConsentService', () => {
     });
   });
 
+  describe('recordResubscribe', () => {
+    // The published SMS Terms say START does not restore the consent Ovrlap
+    // holds; the code must not quietly do so.
+    it('clears the carrier opt-out but does NOT restore consent', async () => {
+      prisma.user.findMany.mockResolvedValue([{ id: USER }]);
+      await service.recordResubscribe(PHONE, 'sms_keyword');
+
+      const [updateManyCall] = prisma.user.updateMany.mock.calls as [
+        Record<string, unknown>,
+      ][];
+      const data = updateManyCall[0].data as Record<string, unknown>;
+      expect(data).toMatchObject({ smsOptedOut: false, smsOptedOutAt: null });
+      expect(data).not.toHaveProperty('smsConsent');
+      expect(data).not.toHaveProperty('smsConsentAt');
+    });
+
+    it('records the event without capturing consent wording', async () => {
+      prisma.user.findMany.mockResolvedValue([{ id: USER }]);
+      await service.recordResubscribe(PHONE, 'sms_keyword');
+      const [manyCall] = prisma.smsConsentEvent.createMany.mock.calls as [
+        { data: Record<string, unknown>[] },
+      ][];
+      expect(manyCall[0].data[0]).toMatchObject({ action: 'resubscribed' });
+      expect(manyCall[0].data[0]).not.toHaveProperty('consentText');
+    });
+  });
+
   describe('recordOptOut', () => {
     it('revokes for every account sharing the number', async () => {
       prisma.user.findMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);

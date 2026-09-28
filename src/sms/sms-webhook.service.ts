@@ -20,7 +20,23 @@ const STOP_KEYWORDS = [
 const START_KEYWORDS = ['START', 'UNSTOP', 'YES', 'RESUME', 'OPTIN', 'OPT-IN'];
 const HELP_KEYWORDS = ['HELP', 'INFO'];
 
-/** Brand-identified replies, as required for A2P 10DLC. */
+/**
+ * Whether Ovrlap sends its own keyword replies.
+ *
+ * Default OFF. Twilio's standard keyword processing already answers STOP,
+ * START and HELP on the sender, so replying from here as well would send the
+ * user two messages for one keyword. It would also contradict the published
+ * SMS Terms, which state that those replies come from the messaging provider
+ * and that their wording is set by the provider.
+ *
+ * Enable this ONLY if Twilio's default handling is turned off for the sender
+ * (Advanced Opt-Out configured to defer), so exactly one reply is produced.
+ */
+function ownKeywordRepliesEnabled(): boolean {
+  return process.env.SMS_KEYWORD_REPLIES === 'true';
+}
+
+/** Brand-identified replies, used only when OWN_KEYWORD_REPLIES is enabled. */
 const STOP_REPLY =
   'Ovrlap: You are unsubscribed from Ovrlap account verification messages ' +
   'and will receive no further texts. Reply START to resubscribe. ' +
@@ -110,6 +126,14 @@ export class SmsWebhookService {
     message: string,
     label: string,
   ): Promise<void> {
+    if (!ownKeywordRepliesEnabled()) {
+      // Twilio's standard keyword processing answers this. Sending our own
+      // would duplicate it.
+      this.logger.log(
+        `${label} not sent by Ovrlap — provider keyword handling is authoritative`,
+      );
+      return;
+    }
     try {
       await this.twilioSmsService.sendSms(phoneNumber, message);
     } catch (error) {

@@ -111,6 +111,18 @@ export class SmsConsentService {
   }
 
   /** Record a START/UNSTOP re-subscribe. */
+  /**
+   * Record a START/UNSTOP. This clears the carrier-level opt-out only.
+   *
+   * It deliberately does NOT restore `smsConsent`. Replying START tells the
+   * messaging provider to resume delivery; it is not an informed opt-in to
+   * Ovrlap's program, and the user may have no idea what they are re-consenting
+   * to. The published SMS Terms say exactly this — "Replying START asks the
+   * messaging provider to resume delivery, but it does not by itself restore
+   * the consent setting Ovrlap holds" — so the code must match. To receive
+   * messages again the user re-ticks the box in profile settings, which goes
+   * through recordConsent() and captures the wording afresh.
+   */
   async recordResubscribe(phoneNumber: string, source: string): Promise<void> {
     const users = await this.prisma.user.findMany({
       where: { phoneNumber },
@@ -124,8 +136,7 @@ export class SmsConsentService {
           userId: u.id,
           phoneNumber,
           action: 'resubscribed' as const,
-          consentText: SMS_CONSENT_TEXT,
-          consentVersion: SMS_CONSENT_VERSION,
+          // No consentText/Version: this is not a consent capture.
           source,
           useCase: SMS_USE_CASE,
         })),
@@ -133,10 +144,6 @@ export class SmsConsentService {
       this.prisma.user.updateMany({
         where: { phoneNumber },
         data: {
-          smsConsent: true,
-          smsConsentAt: new Date(),
-          smsConsentSource: source,
-          smsConsentVersion: SMS_CONSENT_VERSION,
           smsOptedOut: false,
           smsOptedOutAt: null,
         },

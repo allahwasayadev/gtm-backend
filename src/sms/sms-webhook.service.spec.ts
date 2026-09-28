@@ -16,7 +16,12 @@ describe('SmsWebhookService', () => {
 
   const FROM = '+15555550147';
 
+  const OLD_ENV = process.env;
+
   beforeEach(async () => {
+    // Default production posture: Twilio answers keywords, Ovrlap does not.
+    process.env = { ...OLD_ENV };
+    delete process.env.SMS_KEYWORD_REPLIES;
     consent = {
       recordOptOut: jest.fn().mockResolvedValue(undefined),
       recordResubscribe: jest.fn().mockResolvedValue(undefined),
@@ -32,6 +37,10 @@ describe('SmsWebhookService', () => {
     }).compile();
 
     service = moduleRef.get(SmsWebhookService);
+  });
+
+  afterEach(() => {
+    process.env = OLD_ENV;
   });
 
   describe('STOP', () => {
@@ -52,15 +61,12 @@ describe('SmsWebhookService', () => {
       expect(consent.recordOptOut).toHaveBeenCalledWith(FROM, 'sms_keyword');
     });
 
-    it('replies with a brand-identified confirmation', async () => {
+    it('does not send its own reply — Twilio answers STOP', async () => {
       await service.handleInbound(FROM, 'STOP');
-      const [, message] = twilio.sendSms.mock.calls[0];
-      expect(message).toContain('Ovrlap');
-      expect(message).toContain('unsubscribed');
-      expect(message).toMatch(/START/);
+      expect(twilio.sendSms).not.toHaveBeenCalled();
     });
 
-    it('still records the opt-out when the confirmation SMS fails', async () => {
+    it('records the opt-out regardless of reply behaviour', async () => {
       twilio.sendSms.mockRejectedValueOnce(new Error('21610 blocked'));
       await expect(
         service.handleInbound(FROM, 'STOP'),
@@ -83,7 +89,14 @@ describe('SmsWebhookService', () => {
   });
 
   describe('HELP', () => {
-    it('replies with brand, support contact and the rates notice', async () => {
+    it('does not send its own reply — Twilio answers HELP', async () => {
+      await service.handleInbound(FROM, 'HELP');
+      expect(twilio.sendSms).not.toHaveBeenCalled();
+    });
+
+    it('when Ovrlap replies are explicitly enabled, the text is compliant', async () => {
+      // The flag is read per call, so no module reload is needed.
+      process.env.SMS_KEYWORD_REPLIES = 'true';
       await service.handleInbound(FROM, 'HELP');
       const [, message] = twilio.sendSms.mock.calls[0];
       expect(message).toContain('Ovrlap');
