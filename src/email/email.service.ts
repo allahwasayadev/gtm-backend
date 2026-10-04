@@ -167,53 +167,8 @@ export class EmailService {
     }
   }
 
-  async sendVerificationEmail(
-    to: string,
-    userName: string,
-    code: string,
-  ): Promise<boolean> {
-    const firstName = userName.split(' ')[0];
-
-    const html = `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px;">
-        <h2 style="color: #1e293b; margin: 0 0 16px;">Verify Your Email</h2>
-        <p style="color: #334155; font-size: 15px; line-height: 1.6; margin: 0 0 14px;">
-          Hi ${firstName},
-        </p>
-        <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 24px;">
-          Welcome to <strong>OvrLap</strong>! Please use the verification code below to confirm your email address.
-        </p>
-        <div style="background: #f1f5f9; border-radius: 12px; padding: 24px; text-align: center; margin: 0 0 24px;">
-          <span style="font-size: 32px; font-weight: 700; letter-spacing: 8px; color: #1e293b;">${code}</span>
-        </div>
-        <p style="color: #64748b; font-size: 14px; margin: 0 0 8px;">
-          This code expires in <strong>15 minutes</strong>.
-        </p>
-        <p style="color: #64748b; font-size: 14px; margin: 0 0 24px;">
-          If you didn't create an account, you can safely ignore this email.
-        </p>
-        <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 32px 0 16px;" />
-        <p style="color: #94a3b8; font-size: 12px; margin: 0;">
-          Thanks,<br />OvrLap
-        </p>
-      </div>
-    `;
-
-    try {
-      await this.transporter.sendMail({
-        from: `OvrLap <${this.fromEmail}>`,
-        to,
-        subject: `Your verification code: ${code}`,
-        html,
-      });
-
-      this.logger.log(`Verification email sent to ${to}`);
-      return true;
-    } catch (err: unknown) {
-      this.logger.error(`Error sending verification email to ${to}:`, err);
-      return false;
-    }
-  }
+  // sendVerificationEmail removed: no flow emails a verification code or
+  // link any more. Activation and password reset both go by SMS.
 
   async sendPasswordResetEmail(
     to: string,

@@ -7,6 +7,27 @@ import { getTwilioSmsConfig, TwilioSmsConfig } from './twilio.config';
 import { isTestNumber } from './sms-test-mode';
 import { isUsableIdentifier, isUsableSecret } from './twilio-credentials';
 
+/**
+ * Outgoing message templates.
+ *
+ * Deliberately short: brand, code, expiry. No URL — a link in a verification
+ * message trains users to click links in texts, and TCR treats embedded links
+ * in a 2FA campaign as a risk factor.
+ *
+ * NOTE: these no longer carry "Reply STOP to opt out, HELP for help", which
+ * the approved campaign's sample messages DO carry. Twilio's Advanced Opt-Out
+ * still answers STOP and HELP on the inbound side, so opt-out continues to
+ * work — but live traffic now differs from the approved samples. The campaign
+ * description and samples must be updated and accepted before these ship.
+ */
+export function verificationCodeMessage(code: string): string {
+  return `Ovrlap: Your verification code is ${code}. It expires in 10 minutes.`;
+}
+
+export function passwordResetCodeMessage(code: string): string {
+  return `Ovrlap: Your password reset code is ${code}. It expires in 10 minutes.`;
+}
+
 @Injectable()
 export class TwilioSmsService {
   private readonly logger = new Logger(TwilioSmsService.name);
@@ -22,12 +43,32 @@ export class TwilioSmsService {
       return;
     }
 
-    await this.dispatch(
-      phoneNumber,
-      `Ovrlap: Your verification code is ${code}. It expires in 10 minutes. ` +
-        `Do not share this code. Reply STOP to opt out, HELP for help.`,
-      { throwOnFailure: true },
-    );
+    await this.dispatch(phoneNumber, verificationCodeMessage(code), {
+      throwOnFailure: true,
+    });
+  }
+
+  /**
+   * Password reset code.
+   *
+   * Only ever sent to a number the account has already VERIFIED, and only
+   * after assertMaySend() has cleared consent and opt-out state.
+   */
+  async sendPasswordResetCode(
+    phoneNumber: string,
+    code: string,
+  ): Promise<void> {
+    if (isTestNumber(phoneNumber)) {
+      this.logger.warn(
+        `[SMS TEST MODE] Suppressed outbound reset SMS to an allow-listed ` +
+          `test number. The code is still verified normally.`,
+      );
+      return;
+    }
+
+    await this.dispatch(phoneNumber, passwordResetCodeMessage(code), {
+      throwOnFailure: true,
+    });
   }
 
   async sendSms(phoneNumber: string, message: string): Promise<void> {

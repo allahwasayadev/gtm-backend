@@ -62,12 +62,22 @@ export class AuthService {
       );
     }
 
-    const passwordHash = await bcrypt.hash(signupDto.password, 10);
+    const phoneNumber = this.normalizePhoneNumber(signupDto.phoneNumber);
+    if (!phoneNumber) {
+      throw new BadRequestException(
+        'Enter a valid mobile number, including the country code.',
+      );
+    }
 
-    // Normalize phone number if provided
-    const phoneNumber = signupDto.phoneNumber
-      ? this.normalizePhoneNumber(signupDto.phoneNumber)
-      : null;
+    // One account per number: otherwise two accounts could race for codes on
+    // the same handset, and reset-by-phone would be ambiguous.
+    const phoneOwner =
+      await this.authRepository.findUserByPhoneNumber(phoneNumber);
+    if (phoneOwner) {
+      throw new ConflictException('Mobile number already in use');
+    }
+
+    const passwordHash = await bcrypt.hash(signupDto.password, 10);
 
     const user = await this.authRepository.createUser({
       name: signupDto.name,
@@ -75,35 +85,47 @@ export class AuthService {
       passwordHash: passwordHash,
       roles: signupDto.roles,
       ...(signupDto.company && { company: signupDto.company }),
-      ...(phoneNumber && { phoneNumber }),
+      phoneNumber,
     });
 
-    // Record SMS consent when given. Consent is optional: an account is
-    // created either way, and nothing is sent without a record here.
-    if (signupDto.smsConsent === true && phoneNumber) {
-      await this.smsConsentService.recordConsent(user.id, phoneNumber, {
-        source: SmsConsentSource.SignupForm,
-        ipAddress: requestContext?.ipAddress,
-        userAgent: requestContext?.userAgent,
-      });
+    // The compliance record. Written before anything is sent, never after.
+    await this.smsConsentService.recordConsent(user.id, phoneNumber, {
+      source: SmsConsentSource.SignupForm,
+      ipAddress: requestContext?.ipAddress,
+      userAgent: requestContext?.userAgent,
+    });
+
+    // SMS is the only activation channel. No session token is issued here:
+    // the account is not usable until the code is entered.
+    let smsSent = true;
+    let expiresAt: Date | null = null;
+    try {
+      const sent = await this.sendPhoneVerificationCode(user.id, phoneNumber);
+      expiresAt = (sent as { expiresAt?: Date }).expiresAt ?? null;
+    } catch (err) {
+      // The account exists and the number is on file, so resend can recover it.
+      // Never claim delivery that did not happen.
+      smsSent = false;
+      this.logger.error(
+        `Signup verification SMS failed for user ${user.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     }
 
-    // Initiate email verification
-    const emailVerificationSent = await this.initiateEmailVerification(
-      user.id,
-      user.email,
-      user.name,
-    );
-
-    const token = this.generateToken(user.id, user.email);
-
-    // The account exists either way; the client uses this to decide whether to
-    // say "we sent you a code" or to offer resend instead of a false promise.
     return {
-      user: this.buildAuthUserResponse(user),
-      token,
-      emailVerificationSent,
+      pendingVerification: true,
+      email: user.email,
+      phoneHint: this.maskPhoneNumber(phoneNumber),
+      smsSent,
+      expiresAt,
     };
+  }
+
+  /** "+14843231498" -> "+1 •••• ••1498". Enough to recognise, not to read. */
+  private maskPhoneNumber(phoneNumber: string): string {
+    const last4 = phoneNumber.slice(-4);
+    return `${phoneNumber.slice(0, 2)} •••• ••${last4}`;
   }
 
   async login(loginDto: LoginDto) {
@@ -122,12 +144,69 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    // The account is not usable until the phone is verified. Raised only after
+    // the password has been checked, so it tells an attacker nothing they
+    // could not already determine.
+    if (!(user as { isPhoneVerified?: boolean }).isPhoneVerified) {
+      throw new HttpException(
+        {
+          message:
+            'Verify your mobile number to finish setting up your account.',
+          code: 'PHONE_VERIFICATION_REQUIRED',
+          email: user.email,
+          phoneHint: (user as { phoneNumber?: string }).phoneNumber
+            ? this.maskPhoneNumber(
+                (user as { phoneNumber: string }).phoneNumber,
+              )
+            : null,
+        },
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
     const token = this.generateToken(user.id, user.email);
 
     return {
       user: this.buildAuthUserResponse(user),
       token,
     };
+  }
+
+  /**
+   * Activation verify — unauthenticated, because signup issues no token.
+   * Keyed by the email just used to sign up plus the code from the handset.
+   */
+  async verifySignupPhone(email: string, code: string) {
+    const user = await this.authRepository.findUserByEmail(email);
+    if (!user) {
+      // Same shape as a wrong code: do not confirm which part was wrong.
+      throw new BadRequestException('Invalid or expired code.');
+    }
+
+    const result = await this.verifyPhoneCode(user.id, code.trim());
+
+    // Verifying the phone is what activates the account, so the session token
+    // is issued here rather than at signup.
+    return result;
+  }
+
+  /** Activation resend — unauthenticated, same limits as any other send. */
+  async resendSignupPhoneCode(email: string) {
+    const user = await this.authRepository.findUserByEmail(email);
+    if (!user) {
+      throw new BadRequestException('Invalid or expired code.');
+    }
+
+    const phoneNumber = (user as { phoneNumber?: string }).phoneNumber;
+    if (!phoneNumber) {
+      throw new BadRequestException('No mobile number on file for this account.');
+    }
+
+    if ((user as { isPhoneVerified?: boolean }).isPhoneVerified) {
+      throw new BadRequestException('This number is already verified.');
+    }
+
+    return this.sendPhoneVerificationCode(user.id, phoneNumber);
   }
 
   async getProfile(userId: string) {
@@ -141,261 +220,11 @@ export class AuthService {
   }
 
   // Email Verification Methods
-  /**
-   * Issues a fresh code and tries to deliver it.
-   *
-   * Returns whether the email actually went out. Callers MUST NOT tell the user
-   * a code was sent without checking this: sendVerificationEmail swallows SMTP
-   * failures and returns false, and claiming delivery that did not happen leaves
-   * the user waiting for a mail that will never arrive.
-   *
-   * On failure the cooldown stamp is cleared so the account stays recoverable —
-   * otherwise a send that never left the building would still block resend for
-   * RESEND_COOLDOWN_SECONDS. The code itself is left in place: it is valid, and a
-   * later successful resend simply replaces it.
-   */
-  async initiateEmailVerification(
-    userId: string,
-    email: string,
-    userName: string,
-  ): Promise<boolean> {
-    const code = this.generateVerificationCode();
-    const codeHash = this.hashCode(code);
-    const expiresAt = new Date(
-      Date.now() + VERIFICATION_CODE_EXPIRY_MINUTES * 60 * 1000,
-    );
+  // Email verification has been removed entirely. Activation is by SMS to a
+  // required, verified mobile number; there is no email code or link in any
+  // flow, so initiateEmailVerification / verifyEmail / resendVerificationCode
+  // and their endpoints are gone rather than left reachable.
 
-    await this.authRepository.updateEmailVerification(userId, {
-      emailVerificationCode: codeHash,
-      emailVerificationCodeExpiresAt: expiresAt,
-      emailVerificationAttempts: 0,
-      lastVerificationCodeSentAt: new Date(),
-    });
-
-    const sent = await this.emailService.sendVerificationEmail(
-      email,
-      userName,
-      code,
-    );
-
-    if (!sent) {
-      await this.authRepository.updateEmailVerification(userId, {
-        lastVerificationCodeSentAt: null,
-      });
-      this.logger.error(
-        `Verification email could not be delivered to ${email}; cooldown cleared so the user can retry.`,
-      );
-    }
-
-    return sent;
-  }
-
-  async verifyEmail(email: string, code: string) {
-    const user = await this.authRepository.findUserByEmail(email);
-
-    if (!user) {
-      throw new BadRequestException('Invalid verification request');
-    }
-
-    if (user.emailVerified) {
-      throw new BadRequestException('Email is already verified');
-    }
-
-    if (!user.emailVerificationCode || !user.emailVerificationCodeExpiresAt) {
-      throw new BadRequestException(
-        'No verification code found. Please request a new one.',
-      );
-    }
-
-    if (user.emailVerificationAttempts >= MAX_VERIFICATION_ATTEMPTS) {
-      throw new HttpException(
-        'Too many failed attempts. Please request a new code.',
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-
-    if (new Date() > user.emailVerificationCodeExpiresAt) {
-      throw new BadRequestException(
-        'Verification code has expired. Please request a new one.',
-      );
-    }
-
-    const codeHash = this.hashCode(code);
-    const isCodeValid = crypto.timingSafeEqual(
-      Buffer.from(codeHash),
-      Buffer.from(user.emailVerificationCode),
-    );
-
-    if (!isCodeValid) {
-      await this.authRepository.incrementVerificationAttempts(user.id);
-      const remainingAttempts =
-        MAX_VERIFICATION_ATTEMPTS - user.emailVerificationAttempts - 1;
-      throw new BadRequestException(
-        `Invalid code. ${remainingAttempts} attempt${remainingAttempts !== 1 ? 's' : ''} remaining.`,
-      );
-    }
-
-    await this.authRepository.setEmailVerified(user.id);
-
-    const token = this.generateToken(user.id, user.email);
-
-    return {
-      user: this.buildAuthUserResponse(user, { emailVerified: true }),
-      token,
-    };
-  }
-
-  async resendVerificationCode(email: string) {
-    const user = await this.authRepository.findUserByEmail(email);
-
-    if (!user) {
-      // Don't reveal if email exists
-      return { message: 'If the email exists, a new code has been sent.' };
-    }
-
-    if (user.emailVerified) {
-      throw new BadRequestException('Email is already verified');
-    }
-
-    // Check cooldown
-    if (user.lastVerificationCodeSentAt) {
-      const timeSinceLastSent =
-        (Date.now() - user.lastVerificationCodeSentAt.getTime()) / 1000;
-      if (timeSinceLastSent < RESEND_COOLDOWN_SECONDS) {
-        const waitTime = Math.ceil(RESEND_COOLDOWN_SECONDS - timeSinceLastSent);
-        throw new HttpException(
-          `Please wait ${waitTime} seconds before requesting a new code.`,
-          HttpStatus.TOO_MANY_REQUESTS,
-        );
-      }
-    }
-
-    const sent = await this.initiateEmailVerification(
-      user.id,
-      user.email,
-      user.name,
-    );
-
-    if (!sent) {
-      // Honest failure. The cooldown was cleared in initiateEmailVerification,
-      // so the user can try again straight away.
-      throw new HttpException(
-        'We could not send the verification email just now. Please try again in a moment.',
-        HttpStatus.BAD_GATEWAY,
-      );
-    }
-
-    return { message: 'A new verification code has been sent to your email.' };
-  }
-
-  // Password Reset Methods
-  /**
-   * Password reset request.
-   *
-   * Every exit path returns the SAME neutral message. That is the whole point:
-   * any observable difference between a known and an unknown address — a
-   * different status code, a different body, a thrown error — tells an attacker
-   * whether the account exists.
-   *
-   * The cooldown is therefore applied SILENTLY. It previously threw 429 for a
-   * known address while an unknown one returned success, which disclosed
-   * exactly what the neutral message was meant to hide.
-   *
-   * Delivery failures are logged server-side but never surfaced, for the same
-   * reason. Timing is not equalised here; that is a separate, deeper change.
-   */
-  async requestPasswordReset(email: string) {
-    const user = await this.authRepository.findUserByEmail(email);
-
-    const neutralMessage =
-      'If an account exists with this email, a password reset link has been sent.';
-
-    if (!user) {
-      return { message: neutralMessage };
-    }
-
-    if (user.lastPasswordResetRequestAt) {
-      const timeSinceLastRequest =
-        (Date.now() - user.lastPasswordResetRequestAt.getTime()) / 1000;
-      if (timeSinceLastRequest < RESEND_COOLDOWN_SECONDS) {
-        // Rate-limited, but silently: same message, no send, no 429.
-        this.logger.warn(
-          `Password reset re-requested within cooldown for user ${user.id}; suppressed.`,
-        );
-        return { message: neutralMessage };
-      }
-    }
-
-    const token = this.generateResetToken();
-    const tokenHash = this.hashCode(token);
-    const expiresAt = new Date(
-      Date.now() + PASSWORD_RESET_EXPIRY_HOURS * 60 * 60 * 1000,
-    );
-
-    await this.authRepository.updatePasswordReset(user.id, {
-      passwordResetToken: tokenHash,
-      passwordResetTokenExpiresAt: expiresAt,
-      passwordResetAttempts: 0,
-      lastPasswordResetRequestAt: new Date(),
-    });
-
-    const sent = await this.emailService.sendPasswordResetEmail(
-      user.email,
-      user.name,
-      token,
-    );
-
-    if (!sent) {
-      // Deliberately not surfaced: telling the caller the send failed would
-      // confirm the address exists. Logged so it is still observable to us.
-      this.logger.error(
-        `Password reset email could not be delivered to user ${user.id}.`,
-      );
-    }
-
-    return { message: neutralMessage };
-  }
-
-  async validateResetToken(token: string) {
-    const tokenHash = this.hashCode(token);
-    const user =
-      await this.authRepository.findUserByPasswordResetToken(tokenHash);
-
-    if (!user) {
-      return { valid: false };
-    }
-
-    return { valid: true, email: user.email };
-  }
-
-  async resetPassword(token: string, newPassword: string) {
-    const tokenHash = this.hashCode(token);
-    const user =
-      await this.authRepository.findUserByPasswordResetToken(tokenHash);
-
-    if (!user) {
-      throw new BadRequestException(
-        'Invalid or expired reset link. Please request a new one.',
-      );
-    }
-
-    if (user.passwordResetAttempts >= MAX_PASSWORD_RESET_ATTEMPTS) {
-      throw new HttpException(
-        'Too many failed attempts. Please request a new reset link.',
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-
-    const passwordHash = await bcrypt.hash(newPassword, 10);
-    await this.authRepository.updatePassword(user.id, passwordHash);
-    if (!user.emailVerified) {
-      await this.authRepository.setEmailVerified(user.id);
-    }
-
-    return { message: 'Your password has been reset successfully.' };
-  }
-
-  // Phone Verification Methods (signup flow)
   async sendPhoneVerificationCode(userId: string, phoneNumber: string) {
     const user = await this.authRepository.findUserById(userId);
     if (!user) {
@@ -475,6 +304,147 @@ export class AuthService {
       response.code = code;
     }
     return response;
+  }
+
+
+  /**
+   * Password reset request.
+   *
+   * Accepts an email address OR a mobile number. The code is sent only by SMS,
+   * and only to a number the account has already VERIFIED — so a reset can
+   * never be delivered to a number the owner has not proved they control.
+   *
+   * Every exit path returns the SAME neutral message: unknown identifier, no
+   * verified phone, opted out via STOP, rate-limited, or Twilio failing. Any
+   * observable difference would disclose whether the account exists.
+   */
+  async requestPasswordReset(identifier: string) {
+    const neutralMessage =
+      'If an account exists with a verified mobile number, a reset code has been sent to it.';
+
+    const user = await this.findUserByIdentifier(identifier);
+    if (!user) {
+      return { message: neutralMessage };
+    }
+
+    const phoneNumber = (user as { phoneNumber?: string }).phoneNumber;
+    const isPhoneVerified = (user as { isPhoneVerified?: boolean })
+      .isPhoneVerified;
+
+    // No verified phone means no delivery channel. Silent on purpose.
+    if (!phoneNumber || !isPhoneVerified) {
+      this.logger.warn(
+        `Password reset requested for user ${user.id} with no verified phone; suppressed.`,
+      );
+      return { message: neutralMessage };
+    }
+
+    if (user.lastPasswordResetRequestAt) {
+      const elapsed =
+        (Date.now() - user.lastPasswordResetRequestAt.getTime()) / 1000;
+      if (elapsed < RESEND_COOLDOWN_SECONDS) {
+        this.logger.warn(
+          `Password reset re-requested within cooldown for user ${user.id}; suppressed.`,
+        );
+        return { message: neutralMessage };
+      }
+    }
+
+    // Consent and opt-out gate this send exactly as they gate any other. A
+    // number that replied STOP is blocked here, never bypassed.
+    try {
+      await this.smsConsentService.assertMaySend(user.id, phoneNumber);
+    } catch {
+      this.logger.warn(
+        `Password reset blocked by consent/opt-out state for user ${user.id}.`,
+      );
+      return { message: neutralMessage };
+    }
+
+    const code = this.generateVerificationCode();
+    const codeHash = this.hashCode(code);
+    const expiresAt = new Date(
+      Date.now() + PHONE_CODE_EXPIRY_MINUTES * 60 * 1000,
+    );
+
+    await this.authRepository.updatePasswordReset(user.id, {
+      // Field name is historical; it now holds a hashed 6-digit code.
+      passwordResetToken: codeHash,
+      passwordResetTokenExpiresAt: expiresAt,
+      passwordResetAttempts: 0,
+      lastPasswordResetRequestAt: new Date(),
+    });
+
+    try {
+      await this.twilioSmsService.sendPasswordResetCode(phoneNumber, code);
+    } catch (err) {
+      // Not surfaced: reporting the failure would confirm the account exists.
+      this.logger.error(
+        `Password reset SMS failed for user ${user.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    return { message: neutralMessage };
+  }
+
+  /** Resolve an email address or a mobile number to one account. */
+  private async findUserByIdentifier(identifier: string) {
+    const trimmed = identifier.trim();
+    if (trimmed.includes('@')) {
+      return this.authRepository.findUserByEmail(trimmed.toLowerCase());
+    }
+    const normalized = this.normalizePhoneNumber(trimmed);
+    if (!normalized) return null;
+    return this.authRepository.findUserByPhoneNumber(normalized);
+  }
+
+  async resetPassword(identifier: string, code: string, newPassword: string) {
+    const generic = 'Invalid or expired code. Please request a new one.';
+
+    const user = await this.findUserByIdentifier(identifier);
+    if (
+      !user ||
+      !user.passwordResetToken ||
+      !user.passwordResetTokenExpiresAt
+    ) {
+      throw new BadRequestException(generic);
+    }
+
+    if (user.passwordResetAttempts >= MAX_PASSWORD_RESET_ATTEMPTS) {
+      throw new HttpException(
+        'Too many failed attempts. Please request a new code.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    if (new Date() > user.passwordResetTokenExpiresAt) {
+      throw new BadRequestException(generic);
+    }
+
+    const codeHash = this.hashCode(code.trim());
+    const stored = user.passwordResetToken;
+    const valid =
+      codeHash.length === stored.length &&
+      crypto.timingSafeEqual(Buffer.from(codeHash), Buffer.from(stored));
+
+    if (!valid) {
+      await this.authRepository.incrementPasswordResetAttempts(user.id);
+      throw new BadRequestException(generic);
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await this.authRepository.updatePassword(user.id, passwordHash);
+
+    // Burn the code so it cannot be replayed.
+    await this.authRepository.updatePasswordReset(user.id, {
+      passwordResetToken: null,
+      passwordResetTokenExpiresAt: null,
+      passwordResetAttempts: 0,
+    });
+
+    return { message: 'Your password has been reset successfully.' };
   }
 
   async verifyPhoneCode(userId: string, code: string) {

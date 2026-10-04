@@ -12,6 +12,14 @@ export class AuthRepository {
     });
   }
 
+  /**
+   * Reset can start from an email address OR a phone number, so we need to
+   * resolve either to the same account.
+   */
+  async findUserByPhoneNumber(phoneNumber: string): Promise<User | null> {
+    return this.prisma.user.findFirst({ where: { phoneNumber } });
+  }
+
   async createUser(data: {
     name: string;
     email: string;

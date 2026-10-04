@@ -11,10 +11,10 @@ import { AuthService } from './auth.service';
 import {
   SignupDto,
   LoginDto,
-  VerifyEmailDto,
-  ResendVerificationDto,
   ForgotPasswordDto,
   ResetPasswordDto,
+  VerifySignupPhoneDto,
+  ResendSignupPhoneDto,
 } from './dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { SendPhoneVerificationCodeDto, VerifyPhoneVerificationCodeDto } from '../users/dto';
@@ -46,18 +46,17 @@ export class AuthController {
     return this.authService.getProfile(req.user.id);
   }
 
-  // Email Verification Endpoints
-  @Post('verify-email')
-  async verifyEmail(@Body() verifyEmailDto: VerifyEmailDto) {
-    return this.authService.verifyEmail(
-      verifyEmailDto.email,
-      verifyEmailDto.code,
-    );
+  // Activation is by SMS only. The former verify-email / resend-verification
+  // endpoints are gone: an email code or link is no longer part of any flow,
+  // so leaving them reachable would contradict that.
+  @Post('phone/verify')
+  async verifySignupPhone(@Body() dto: VerifySignupPhoneDto) {
+    return this.authService.verifySignupPhone(dto.email, dto.code);
   }
 
-  @Post('resend-verification')
-  async resendVerification(@Body() resendDto: ResendVerificationDto) {
-    return this.authService.resendVerificationCode(resendDto.email);
+  @Post('phone/resend')
+  async resendSignupPhone(@Body() dto: ResendSignupPhoneDto) {
+    return this.authService.resendSignupPhoneCode(dto.email);
   }
 
   // Phone Verification Endpoints (used during signup flow)
@@ -81,20 +80,19 @@ export class AuthController {
 
   // Password Reset Endpoints
   @Post('forgot-password')
-  async forgotPassword(@Body() forgotPasswordDto: ForgotPasswordDto) {
-    return this.authService.requestPasswordReset(forgotPasswordDto.email);
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.requestPasswordReset(dto.identifier);
   }
 
-  @Get('verify-reset-token/:token')
-  async verifyResetToken(@Param('token') token: string) {
-    return this.authService.validateResetToken(token);
-  }
+  // verify-reset-token is gone with the emailed link: there is no token to
+  // pre-validate, and probing one would be an enumeration vector anyway.
 
   @Post('reset-password')
-  async resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
+  async resetPassword(@Body() dto: ResetPasswordDto) {
     return this.authService.resetPassword(
-      resetPasswordDto.token,
-      resetPasswordDto.newPassword,
+      dto.identifier,
+      dto.code,
+      dto.newPassword,
     );
   }
 }
