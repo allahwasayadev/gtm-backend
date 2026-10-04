@@ -289,29 +289,40 @@ export class AuthService {
   }
 
   // Password Reset Methods
+  /**
+   * Password reset request.
+   *
+   * Every exit path returns the SAME neutral message. That is the whole point:
+   * any observable difference between a known and an unknown address — a
+   * different status code, a different body, a thrown error — tells an attacker
+   * whether the account exists.
+   *
+   * The cooldown is therefore applied SILENTLY. It previously threw 429 for a
+   * known address while an unknown one returned success, which disclosed
+   * exactly what the neutral message was meant to hide.
+   *
+   * Delivery failures are logged server-side but never surfaced, for the same
+   * reason. Timing is not equalised here; that is a separate, deeper change.
+   */
   async requestPasswordReset(email: string) {
     const user = await this.authRepository.findUserByEmail(email);
 
-    // Always return success to prevent email enumeration
-    const successMessage =
+    const neutralMessage =
       'If an account exists with this email, a password reset link has been sent.';
 
     if (!user) {
-      return { message: successMessage };
+      return { message: neutralMessage };
     }
 
-    // Check cooldown
     if (user.lastPasswordResetRequestAt) {
       const timeSinceLastRequest =
         (Date.now() - user.lastPasswordResetRequestAt.getTime()) / 1000;
       if (timeSinceLastRequest < RESEND_COOLDOWN_SECONDS) {
-        const waitTime = Math.ceil(
-          RESEND_COOLDOWN_SECONDS - timeSinceLastRequest,
+        // Rate-limited, but silently: same message, no send, no 429.
+        this.logger.warn(
+          `Password reset re-requested within cooldown for user ${user.id}; suppressed.`,
         );
-        throw new HttpException(
-          `Please wait ${waitTime} seconds before requesting another reset.`,
-          HttpStatus.TOO_MANY_REQUESTS,
-        );
+        return { message: neutralMessage };
       }
     }
 
@@ -328,9 +339,21 @@ export class AuthService {
       lastPasswordResetRequestAt: new Date(),
     });
 
-    await this.emailService.sendPasswordResetEmail(user.email, user.name, token);
+    const sent = await this.emailService.sendPasswordResetEmail(
+      user.email,
+      user.name,
+      token,
+    );
 
-    return { message: successMessage };
+    if (!sent) {
+      // Deliberately not surfaced: telling the caller the send failed would
+      // confirm the address exists. Logged so it is still observable to us.
+      this.logger.error(
+        `Password reset email could not be delivered to user ${user.id}.`,
+      );
+    }
+
+    return { message: neutralMessage };
   }
 
   async validateResetToken(token: string) {
