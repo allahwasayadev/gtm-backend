@@ -125,59 +125,96 @@ describe('AuthService — SMS-first signup', () => {
     expect(res.smsSent).toBe(true);
   });
 
-  describe('pending signups do not hold an address hostage', () => {
+  describe('reclaim is opt-in and cannot touch a real account', () => {
     const hoursAgo = (h: number) => new Date(Date.now() - h * 3600_000);
 
-    it('reclaims an unactivated signup older than the TTL', async () => {
+    it('reclaims a pending signup older than the TTL', async () => {
       repo.findUserByEmail.mockResolvedValue({
         id: 'stale',
+        pendingSignupSince: hoursAgo(48),
         isPhoneVerified: false,
-        createdAt: hoursAgo(48),
       });
       await service.signup(DTO);
       expect(repo.deleteUser).toHaveBeenCalledWith('stale');
       expect(repo.createUser).toHaveBeenCalled();
     });
 
-    // A recent pending signup is probably the same person retrying, and
-    // deleting it instantly would let anyone displace it.
-    it('refuses to reclaim a recent one, and points at signing in', async () => {
+    it('refuses a recent pending signup, and points at signing in', async () => {
       repo.findUserByEmail.mockResolvedValue({
         id: 'fresh',
+        pendingSignupSince: hoursAgo(1),
         isPhoneVerified: false,
-        createdAt: hoursAgo(1),
       });
-      await expect(service.signup(DTO)).rejects.toThrow(/Sign in with your password/);
+      await expect(service.signup(DTO)).rejects.toThrow(
+        /Sign in with your password/,
+      );
       expect(repo.deleteUser).not.toHaveBeenCalled();
     });
 
-    it('never reclaims an ACTIVATED account', async () => {
+    /**
+     * THE dangerous case. An established account midway through changing its
+     * number has isPhoneVerified = false while owning real data. Keying the
+     * rule on verification would cascade-delete their account lists,
+     * connections, notifications, observed overlaps and sent invites.
+     */
+    it('never reclaims an ACTIVATED account that is mid phone-number change', async () => {
       repo.findUserByEmail.mockResolvedValue({
-        id: 'real',
-        isPhoneVerified: true,
+        id: 'established',
+        pendingSignupSince: null, // activation cleared it, permanently
+        isPhoneVerified: false, // temporarily unverified: changing number
         createdAt: hoursAgo(10_000),
       });
       await expect(service.signup(DTO)).rejects.toThrow('Email already in use');
       expect(repo.deleteUser).not.toHaveBeenCalled();
+      expect(repo.createUser).not.toHaveBeenCalled();
     });
 
-    it('frees a stale phone number too', async () => {
+    it('never reclaims that account through the phone collision path either', async () => {
+      repo.findUserByPhoneNumber.mockResolvedValue({
+        id: 'established-phone',
+        pendingSignupSince: null,
+        isPhoneVerified: false,
+        createdAt: hoursAgo(10_000),
+      });
+      await expect(service.signup(DTO)).rejects.toThrow(
+        'Mobile number already in use',
+      );
+      expect(repo.deleteUser).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The 23 rows already in production. `prisma db push` adds the column
+     * without running any backfill, so they will all read NULL — which must
+     * mean "never reclaimable" rather than "reclaim me".
+     */
+    it('never reclaims a pre-existing row with no marker, however old', async () => {
+      for (const existing of [
+        { id: 'legacy-1', isPhoneVerified: false, createdAt: hoursAgo(50_000) },
+        { id: 'legacy-2', isPhoneVerified: true, createdAt: hoursAgo(50_000) },
+        { id: 'legacy-3', pendingSignupSince: null, createdAt: hoursAgo(50_000) },
+      ]) {
+        repo.deleteUser.mockClear();
+        repo.findUserByEmail.mockResolvedValue(existing);
+        await expect(service.signup(DTO)).rejects.toThrow('Email already in use');
+        expect(repo.deleteUser).not.toHaveBeenCalled();
+      }
+    });
+
+    it('frees a stale pending phone number', async () => {
       repo.findUserByPhoneNumber.mockResolvedValue({
         id: 'stale-phone',
+        pendingSignupSince: hoursAgo(48),
         isPhoneVerified: false,
-        createdAt: hoursAgo(48),
       });
       await service.signup(DTO);
       expect(repo.deleteUser).toHaveBeenCalledWith('stale-phone');
     });
 
-    it('will not free a phone belonging to an activated account', async () => {
-      repo.findUserByPhoneNumber.mockResolvedValue({
-        id: 'real-phone',
-        isPhoneVerified: true,
-        createdAt: hoursAgo(10_000),
-      });
-      await expect(service.signup(DTO)).rejects.toThrow('Mobile number already in use');
+    it('stamps the marker on accounts it creates', async () => {
+      await service.signup(DTO);
+      expect(repo.createUser).toHaveBeenCalledWith(
+        expect.objectContaining({ pendingSignupSince: expect.any(Date) }),
+      );
     });
   });
 

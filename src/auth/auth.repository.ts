@@ -32,6 +32,8 @@ export class AuthRepository {
     company?: string;
     roles: UserRole[];
     phoneNumber?: string;
+    /** Opt-in reclaim marker; set only by the SMS-first signup flow. */
+    pendingSignupSince?: Date;
   }): Promise<User> {
     return this.prisma.user.create({
       data,
@@ -154,6 +156,10 @@ export class AuthRepository {
       where: { id: userId },
       data: {
         isPhoneVerified: true,
+        // Activation ends the pending state permanently. A later number change
+        // flips isPhoneVerified back to false, but this stays null, which is
+        // what keeps an established account out of the reclaim path.
+        pendingSignupSince: null,
         phoneVerificationCode: null,
         phoneVerificationCodeExpiresAt: null,
         phoneVerificationAttempts: 0,

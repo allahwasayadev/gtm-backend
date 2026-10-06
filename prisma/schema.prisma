@@ -31,6 +31,20 @@ model User {
   emailVerificationAttempts      Int       @default(0)
   lastVerificationCodeSentAt     DateTime?
 
+  // Set at creation by the SMS-first signup flow, and cleared the moment the
+  // account activates. It is the ONLY marker the reclaim rule consults.
+  //
+  // Deliberately opt-IN rather than opt-out. Deployment applies schema changes
+  // with `prisma db push`, which does NOT run migration SQL, so any backfill
+  // would silently not happen. A NULL default therefore has to mean "never
+  // reclaimable" — every pre-existing row is safe without any backfill at all.
+  //
+  // isPhoneVerified must never be used here: an activated user midway through
+  // changing their number is temporarily unverified while still owning real
+  // data, and reclaiming them cascade-deletes their lists, connections,
+  // notifications and invites.
+  pendingSignupSince             DateTime?
+
   // Phone verification
   phoneNumber                    String?
   isPhoneVerified                Boolean   @default(false)

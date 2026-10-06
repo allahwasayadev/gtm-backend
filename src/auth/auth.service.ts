@@ -56,18 +56,20 @@ export class AuthService {
 
     if (existingUser) {
       // An activated account always wins: the address is genuinely taken.
-      if ((existingUser as { isPhoneVerified?: boolean }).isPhoneVerified) {
-        throw new ConflictException('Email already in use');
-      }
-      // Otherwise this is a PENDING signup that never activated — an SMS that
-      // failed, a code that expired, an abandoned attempt. It holds the address
-      // hostage with no way to get it back, so it is reclaimable once stale.
-      // A pending signup is not proof of ownership; an activated one is.
+      // Anything not stamped as a pending signup owns its address outright.
       if (!this.isReclaimable(existingUser)) {
+        if (
+          !(existingUser as { pendingSignupSince?: Date | null })
+            .pendingSignupSince
+        ) {
+          throw new ConflictException('Email already in use');
+        }
         throw new ConflictException(
           'An unfinished sign-up already exists for this email. Sign in with your password to finish it.',
         );
       }
+      // A stale pending signup holds the address hostage with no way to get it
+      // back, so it is reclaimable. A pending signup is not proof of ownership.
       await this.authRepository.deleteUser(existingUser.id);
     }
 
@@ -90,10 +92,7 @@ export class AuthService {
     const phoneOwner =
       await this.authRepository.findUserByPhoneNumber(phoneNumber);
     if (phoneOwner) {
-      if (
-        (phoneOwner as { isPhoneVerified?: boolean }).isPhoneVerified ||
-        !this.isReclaimable(phoneOwner)
-      ) {
+      if (!this.isReclaimable(phoneOwner)) {
         throw new ConflictException('Mobile number already in use');
       }
       // Same reasoning as the email: a stale pending signup must not lock a
@@ -110,6 +109,9 @@ export class AuthService {
       roles: signupDto.roles,
       ...(signupDto.company && { company: signupDto.company }),
       phoneNumber,
+      // Opt-in marker: only accounts created here are ever reclaimable, and
+      // only until they activate.
+      pendingSignupSince: new Date(),
     });
 
     // The compliance record. Written before anything is sent, never after.
@@ -149,11 +151,30 @@ export class AuthService {
     };
   }
 
-  /** A never-activated signup older than the TTL may be reclaimed. */
-  private isReclaimable(user: { createdAt?: Date }): boolean {
-    if (!user.createdAt) return false;
+  /**
+   * May this pending signup be reclaimed?
+   *
+   * Reclaiming DELETES the account, which cascades to its account lists,
+   * connections, notifications, observed overlaps and sent invites. So the
+   * test is opt-IN and deliberately narrow: only an account the new signup
+   * flow stamped as pending, which has never activated, and which is older
+   * than the TTL.
+   *
+   * A NULL marker means "not a pending signup" and is never reclaimable. That
+   * is what makes every pre-existing row safe without a backfill — which
+   * matters, because deployment uses `prisma db push` and would not run one.
+   *
+   * isPhoneVerified is NOT consulted and must never be: an account that
+   * activated and later began changing its number has isPhoneVerified = false
+   * while remaining a real account with real data.
+   */
+  private isReclaimable(user: { pendingSignupSince?: Date | null }): boolean {
+    // Never stamped, or already activated (activation clears it) — out of scope.
+    if (!user.pendingSignupSince) return false;
+
     const ageHours =
-      (Date.now() - new Date(user.createdAt).getTime()) / (1000 * 60 * 60);
+      (Date.now() - new Date(user.pendingSignupSince).getTime()) /
+      (1000 * 60 * 60);
     return ageHours >= PENDING_SIGNUP_TTL_HOURS;
   }
 
