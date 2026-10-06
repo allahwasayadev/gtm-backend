@@ -20,6 +20,11 @@ export class AuthRepository {
     return this.prisma.user.findFirst({ where: { phoneNumber } });
   }
 
+  /** Used only to reclaim an unactivated signup that has passed its TTL. */
+  async deleteUser(userId: string): Promise<void> {
+    await this.prisma.user.delete({ where: { id: userId } });
+  }
+
   async createUser(data: {
     name: string;
     email: string;

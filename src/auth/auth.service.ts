@@ -29,6 +29,9 @@ const PHONE_CODE_EXPIRY_MINUTES = 10;
 const PHONE_RESEND_COOLDOWN_SECONDS = 60;
 const MAX_PHONE_VERIFICATION_ATTEMPTS = 5;
 const MAX_PHONE_SENDS_PER_HOUR = 5;
+const ACTIVATION_TOKEN_EXPIRY_MINUTES = 30;
+/** An unactivated signup holds its email and phone for this long, then may be reclaimed. */
+const PENDING_SIGNUP_TTL_HOURS = 24;
 const PHONE_SEND_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
 @Injectable()
@@ -52,7 +55,20 @@ export class AuthService {
     );
 
     if (existingUser) {
-      throw new ConflictException('Email already in use');
+      // An activated account always wins: the address is genuinely taken.
+      if ((existingUser as { isPhoneVerified?: boolean }).isPhoneVerified) {
+        throw new ConflictException('Email already in use');
+      }
+      // Otherwise this is a PENDING signup that never activated — an SMS that
+      // failed, a code that expired, an abandoned attempt. It holds the address
+      // hostage with no way to get it back, so it is reclaimable once stale.
+      // A pending signup is not proof of ownership; an activated one is.
+      if (!this.isReclaimable(existingUser)) {
+        throw new ConflictException(
+          'An unfinished sign-up already exists for this email. Sign in with your password to finish it.',
+        );
+      }
+      await this.authRepository.deleteUser(existingUser.id);
     }
 
     const hasAdminRole = signupDto.roles?.some((r) => r === 'Admin');
@@ -74,7 +90,15 @@ export class AuthService {
     const phoneOwner =
       await this.authRepository.findUserByPhoneNumber(phoneNumber);
     if (phoneOwner) {
-      throw new ConflictException('Mobile number already in use');
+      if (
+        (phoneOwner as { isPhoneVerified?: boolean }).isPhoneVerified ||
+        !this.isReclaimable(phoneOwner)
+      ) {
+        throw new ConflictException('Mobile number already in use');
+      }
+      // Same reasoning as the email: a stale pending signup must not lock a
+      // number out of the product forever.
+      await this.authRepository.deleteUser(phoneOwner.id);
     }
 
     const passwordHash = await bcrypt.hash(signupDto.password, 10);
@@ -119,7 +143,18 @@ export class AuthService {
       phoneHint: this.maskPhoneNumber(phoneNumber),
       smsSent,
       expiresAt,
+      // Proves this caller just created the account. Every activation step
+      // requires it, so knowing an email address grants nothing.
+      activationToken: this.generateActivationToken(user.id, user.email),
     };
+  }
+
+  /** A never-activated signup older than the TTL may be reclaimed. */
+  private isReclaimable(user: { createdAt?: Date }): boolean {
+    if (!user.createdAt) return false;
+    const ageHours =
+      (Date.now() - new Date(user.createdAt).getTime()) / (1000 * 60 * 60);
+    return ageHours >= PENDING_SIGNUP_TTL_HOURS;
   }
 
   /** "+14843231498" -> "+1 •••• ••1498". Enough to recognise, not to read. */
@@ -159,6 +194,12 @@ export class AuthService {
                 (user as { phoneNumber: string }).phoneNumber,
               )
             : null,
+          // No phone on file at all — existing accounts predating this flow.
+          // The activation screen asks for one instead of dead-ending.
+          needsPhoneNumber: !(user as { phoneNumber?: string }).phoneNumber,
+          // Issued only after the password checked out, so this is the
+          // migration path for every existing account.
+          activationToken: this.generateActivationToken(user.id, user.email),
         },
         HttpStatus.FORBIDDEN,
       );
@@ -176,37 +217,84 @@ export class AuthService {
    * Activation verify — unauthenticated, because signup issues no token.
    * Keyed by the email just used to sign up plus the code from the handset.
    */
-  async verifySignupPhone(email: string, code: string) {
-    const user = await this.authRepository.findUserByEmail(email);
-    if (!user) {
-      // Same shape as a wrong code: do not confirm which part was wrong.
-      throw new BadRequestException('Invalid or expired code.');
+  /**
+   * Activation: set or correct the number the code goes to.
+   *
+   * Covers three cases with one path — an existing account that never had a
+   * phone, a signup where the wrong number was typed, and a number that has
+   * since changed. Authorised by the activation token, never by email alone.
+   */
+  async setActivationPhone(
+    activationToken: string,
+    phoneNumber: string,
+    requestContext?: { ipAddress?: string | null; userAgent?: string | null },
+  ) {
+    const user = await this.userFromActivationToken(activationToken);
+
+    const normalized = this.normalizePhoneNumber(phoneNumber);
+    if (!normalized) {
+      throw new BadRequestException(
+        'Enter a valid mobile number, including the country code.',
+      );
     }
 
-    const result = await this.verifyPhoneCode(user.id, code.trim());
+    const owner = await this.authRepository.findUserByPhoneNumber(normalized);
+    if (owner && owner.id !== user.id) {
+      throw new ConflictException('Mobile number already in use');
+    }
 
-    // Verifying the phone is what activates the account, so the session token
-    // is issued here rather than at signup.
-    return result;
+    // Consent is recorded against the number actually being used, so a
+    // corrected number gets its own record rather than inheriting the old one.
+    await this.authRepository.updatePhoneVerification(user.id, {
+      phoneNumber: normalized,
+      isPhoneVerified: false,
+      phoneVerificationCode: null,
+      phoneVerificationCodeExpiresAt: null,
+      phoneVerificationAttempts: 0,
+    });
+
+    await this.smsConsentService.recordConsent(user.id, normalized, {
+      source: SmsConsentSource.VerifyPhoneScreen,
+      ipAddress: requestContext?.ipAddress,
+      userAgent: requestContext?.userAgent,
+    });
+
+    const sent = await this.sendPhoneVerificationCode(user.id, normalized);
+    return {
+      phoneHint: this.maskPhoneNumber(normalized),
+      expiresAt: (sent as { expiresAt?: Date }).expiresAt ?? null,
+      activationToken,
+    };
   }
 
-  /** Activation resend — unauthenticated, same limits as any other send. */
-  async resendSignupPhoneCode(email: string) {
-    const user = await this.authRepository.findUserByEmail(email);
-    if (!user) {
-      throw new BadRequestException('Invalid or expired code.');
-    }
-
+  /** Activation: resend to the number already on file. */
+  async resendActivationCode(activationToken: string) {
+    const user = await this.userFromActivationToken(activationToken);
     const phoneNumber = (user as { phoneNumber?: string }).phoneNumber;
+
     if (!phoneNumber) {
-      throw new BadRequestException('No mobile number on file for this account.');
+      throw new BadRequestException(
+        'Add a mobile number before requesting a code.',
+      );
     }
 
-    if ((user as { isPhoneVerified?: boolean }).isPhoneVerified) {
-      throw new BadRequestException('This number is already verified.');
-    }
+    const sent = await this.sendPhoneVerificationCode(user.id, phoneNumber);
+    return {
+      phoneHint: this.maskPhoneNumber(phoneNumber),
+      expiresAt: (sent as { expiresAt?: Date }).expiresAt ?? null,
+    };
+  }
 
-    return this.sendPhoneVerificationCode(user.id, phoneNumber);
+  /**
+   * Activation: the code from the handset. This is what creates the session.
+   *
+   * userFromActivationToken rejects an already-verified account, and
+   * verifyPhoneCode checks the code before anything is issued — so there is no
+   * path here that returns a token without a correct code.
+   */
+  async verifyActivation(activationToken: string, code: string) {
+    const user = await this.userFromActivationToken(activationToken);
+    return this.verifyPhoneCode(user.id, code.trim());
   }
 
   async getProfile(userId: string) {
@@ -457,12 +545,14 @@ export class AuthService {
       throw new BadRequestException('No phone number on file. Please send a verification code first.');
     }
 
+    // NEVER mint a session here. This used to short-circuit and return a token
+    // for an already-verified account BEFORE the submitted code was checked.
+    // While this method was authenticated-only that was merely redundant; once
+    // a public endpoint reached it, a known email plus any six digits yielded
+    // that user's session. Already-verified accounts are rejected outright and
+    // must authenticate with a password.
     if ((user as any).isPhoneVerified) {
-      const token = this.generateToken(user.id, user.email);
-      return {
-        user: this.buildAuthUserResponse(user, { isPhoneVerified: true }),
-        token,
-      };
+      throw new BadRequestException('This number is already verified.');
     }
 
     if (!(user as any).phoneVerificationCode || !(user as any).phoneVerificationCodeExpiresAt) {
@@ -519,6 +609,50 @@ export class AuthService {
       sub: userId,
       email,
     });
+  }
+
+  /**
+   * Short-lived token that proves the holder knows the password (or just
+   * created the account) and may ONLY finish phone verification.
+   *
+   * This exists so activation is never keyed on an email address alone. It
+   * carries scope:'activation', which JwtStrategy rejects, so it cannot be
+   * used to reach any guarded route.
+   */
+  private generateActivationToken(userId: string, email: string): string {
+    return this.jwtService.sign(
+      { sub: userId, email, scope: 'activation' },
+      { expiresIn: `${ACTIVATION_TOKEN_EXPIRY_MINUTES}m` },
+    );
+  }
+
+  /** Resolve an activation token to its account, or reject it. */
+  private async userFromActivationToken(token: string) {
+    let payload: { sub?: string; scope?: string };
+    try {
+      payload = this.jwtService.verify(token);
+    } catch {
+      throw new UnauthorizedException(
+        'This activation link has expired. Please sign in again.',
+      );
+    }
+
+    if (payload.scope !== 'activation' || !payload.sub) {
+      throw new UnauthorizedException('Invalid activation token.');
+    }
+
+    const user = await this.authRepository.findUserById(payload.sub);
+    if (!user) {
+      throw new UnauthorizedException('Invalid activation token.');
+    }
+
+    if ((user as { isPhoneVerified?: boolean }).isPhoneVerified) {
+      throw new UnauthorizedException(
+        'This account is already active. Please sign in with your password.',
+      );
+    }
+
+    return user;
   }
 
   private generateVerificationCode(): string {

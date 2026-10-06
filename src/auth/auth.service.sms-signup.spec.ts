@@ -45,6 +45,7 @@ describe('AuthService — SMS-first signup', () => {
     repo = {
       findUserByEmail: jest.fn().mockResolvedValue(null),
       findUserByPhoneNumber: jest.fn().mockResolvedValue(null),
+      deleteUser: jest.fn().mockResolvedValue(undefined),
       findUserById: jest.fn().mockResolvedValue(CREATED),
       createUser: jest.fn().mockResolvedValue(CREATED),
       updatePhoneVerification: jest.fn().mockResolvedValue(CREATED),
@@ -60,7 +61,10 @@ describe('AuthService — SMS-first signup', () => {
       providers: [
         AuthService,
         { provide: AuthRepository, useValue: repo },
-        { provide: JwtService, useValue: { sign: () => 'jwt' } },
+        {
+          provide: JwtService,
+          useValue: { sign: () => 'jwt', verify: () => ({ sub: 'u1', scope: 'activation' }) },
+        },
         { provide: EmailService, useValue: email },
         { provide: TwilioSmsService, useValue: sms },
         { provide: SmsConsentService, useValue: consent },
@@ -119,6 +123,67 @@ describe('AuthService — SMS-first signup', () => {
   it('does not claim delivery when Twilio succeeds only partially', async () => {
     const res = await service.signup(DTO);
     expect(res.smsSent).toBe(true);
+  });
+
+  describe('pending signups do not hold an address hostage', () => {
+    const hoursAgo = (h: number) => new Date(Date.now() - h * 3600_000);
+
+    it('reclaims an unactivated signup older than the TTL', async () => {
+      repo.findUserByEmail.mockResolvedValue({
+        id: 'stale',
+        isPhoneVerified: false,
+        createdAt: hoursAgo(48),
+      });
+      await service.signup(DTO);
+      expect(repo.deleteUser).toHaveBeenCalledWith('stale');
+      expect(repo.createUser).toHaveBeenCalled();
+    });
+
+    // A recent pending signup is probably the same person retrying, and
+    // deleting it instantly would let anyone displace it.
+    it('refuses to reclaim a recent one, and points at signing in', async () => {
+      repo.findUserByEmail.mockResolvedValue({
+        id: 'fresh',
+        isPhoneVerified: false,
+        createdAt: hoursAgo(1),
+      });
+      await expect(service.signup(DTO)).rejects.toThrow(/Sign in with your password/);
+      expect(repo.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it('never reclaims an ACTIVATED account', async () => {
+      repo.findUserByEmail.mockResolvedValue({
+        id: 'real',
+        isPhoneVerified: true,
+        createdAt: hoursAgo(10_000),
+      });
+      await expect(service.signup(DTO)).rejects.toThrow('Email already in use');
+      expect(repo.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it('frees a stale phone number too', async () => {
+      repo.findUserByPhoneNumber.mockResolvedValue({
+        id: 'stale-phone',
+        isPhoneVerified: false,
+        createdAt: hoursAgo(48),
+      });
+      await service.signup(DTO);
+      expect(repo.deleteUser).toHaveBeenCalledWith('stale-phone');
+    });
+
+    it('will not free a phone belonging to an activated account', async () => {
+      repo.findUserByPhoneNumber.mockResolvedValue({
+        id: 'real-phone',
+        isPhoneVerified: true,
+        createdAt: hoursAgo(10_000),
+      });
+      await expect(service.signup(DTO)).rejects.toThrow('Mobile number already in use');
+    });
+  });
+
+  it('returns an activation token so activation is not keyed on the email', async () => {
+    const res = await service.signup(DTO);
+    expect(res.activationToken).toBeTruthy();
   });
 
   describe('login', () => {

@@ -6,6 +6,11 @@ import { PrismaService } from '../../prisma/prisma.service';
 export interface JwtPayload {
   sub: string;
   email: string;
+  /**
+   * Absent on a normal session. 'activation' marks a short-lived token that may
+   * ONLY be used to finish phone verification — never to access the app.
+   */
+  scope?: 'activation';
 }
 
 @Injectable()
@@ -19,6 +24,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload) {
+    // An activation token is signed with the same key, so it must be rejected
+    // explicitly here or it would authenticate every guarded route in the app.
+    if (payload.scope) {
+      throw new UnauthorizedException('This token cannot be used to sign in');
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       select: {

@@ -13,8 +13,9 @@ import {
   LoginDto,
   ForgotPasswordDto,
   ResetPasswordDto,
-  VerifySignupPhoneDto,
-  ResendSignupPhoneDto,
+  SetActivationPhoneDto,
+  ActivationTokenDto,
+  VerifyActivationDto,
 } from './dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { SendPhoneVerificationCodeDto, VerifyPhoneVerificationCodeDto } from '../users/dto';
@@ -49,14 +50,35 @@ export class AuthController {
   // Activation is by SMS only. The former verify-email / resend-verification
   // endpoints are gone: an email code or link is no longer part of any flow,
   // so leaving them reachable would contradict that.
-  @Post('phone/verify')
-  async verifySignupPhone(@Body() dto: VerifySignupPhoneDto) {
-    return this.authService.verifySignupPhone(dto.email, dto.code);
+  // Activation is authorised by a short-lived, scope-limited activation token
+  // issued at signup or by a password-correct login — never by an email
+  // address alone, which would let anyone request another user's session.
+  @Post('activation/phone')
+  async setActivationPhone(
+    @Body() dto: SetActivationPhoneDto,
+    @Request() req: any,
+  ) {
+    return this.authService.setActivationPhone(
+      dto.activationToken,
+      dto.phoneNumber,
+      {
+        ipAddress:
+          (req.headers?.['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+          req.ip ||
+          null,
+        userAgent: (req.headers?.['user-agent'] as string) ?? null,
+      },
+    );
   }
 
-  @Post('phone/resend')
-  async resendSignupPhone(@Body() dto: ResendSignupPhoneDto) {
-    return this.authService.resendSignupPhoneCode(dto.email);
+  @Post('activation/resend')
+  async resendActivation(@Body() dto: ActivationTokenDto) {
+    return this.authService.resendActivationCode(dto.activationToken);
+  }
+
+  @Post('activation/verify')
+  async verifyActivation(@Body() dto: VerifyActivationDto) {
+    return this.authService.verifyActivation(dto.activationToken, dto.code);
   }
 
   // Phone Verification Endpoints (used during signup flow)
