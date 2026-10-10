@@ -18,6 +18,7 @@ import {
   VerifyActivationDto,
 } from './dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { JwtSessionGuard } from './guards/jwt-session.guard';
 import { SendPhoneVerificationCodeDto, VerifyPhoneVerificationCodeDto } from '../users/dto';
 
 @Controller('auth')
@@ -53,6 +54,14 @@ export class AuthController {
   // Activation is authorised by a short-lived, scope-limited activation token
   // issued at signup or by a password-correct login — never by an email
   // address alone, which would let anyone request another user's session.
+  // Guarded WITHOUT the activation gate, or it would reject the request sent
+  // to get past that very gate.
+  @UseGuards(JwtSessionGuard)
+  @Post('activation/from-session')
+  async activationFromSession(@Request() req: any) {
+    return this.authService.activationFromSession(req.user.id);
+  }
+
   @Post('activation/phone')
   async setActivationPhone(
     @Body() dto: SetActivationPhoneDto,

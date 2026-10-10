@@ -40,6 +40,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         roles: true,
         emailVerified: true,
         createdAt: true,
+        // Needed by JwtAuthGuard to enforce activation on EXISTING sessions:
+        // a token issued before this flow has no scope and would otherwise
+        // sail straight past login.
+        isPhoneVerified: true,
+        phoneNumber: true,
       },
     });
 

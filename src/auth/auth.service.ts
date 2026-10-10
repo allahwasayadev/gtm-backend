@@ -239,6 +239,33 @@ export class AuthService {
    * Keyed by the email just used to sign up plus the code from the handset.
    */
   /**
+   * Trade an existing, still-valid session for an activation token.
+   *
+   * This is the migration path for users who never log in again because their
+   * session is already active. Nothing is sent here; it only hands back the
+   * token plus what the activation screen needs to show.
+   */
+  async activationFromSession(userId: string) {
+    const user = await this.authRepository.findUserById(userId);
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    if ((user as { isPhoneVerified?: boolean }).isPhoneVerified) {
+      throw new BadRequestException('This account is already verified.');
+    }
+
+    const phoneNumber = (user as { phoneNumber?: string }).phoneNumber;
+
+    return {
+      email: user.email,
+      phoneHint: phoneNumber ? this.maskPhoneNumber(phoneNumber) : null,
+      needsPhoneNumber: !phoneNumber,
+      activationToken: this.generateActivationToken(user.id, user.email),
+    };
+  }
+
+  /**
    * Activation: set or correct the number the code goes to.
    *
    * Covers three cases with one path — an existing account that never had a
