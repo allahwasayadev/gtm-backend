@@ -240,6 +240,7 @@ describe('SmsConsentService', () => {
    */
   describe('recordConsentIfMissing', () => {
     it('never clears an opt-out', async () => {
+      prisma.user.findUnique.mockResolvedValue({ smsConsent: false });
       prisma.smsConsentEvent.findFirst.mockResolvedValue(null);
       await service.recordConsentIfMissing('u1', '+14155550123', {
         source: 'verify_phone_screen',
@@ -252,6 +253,7 @@ describe('SmsConsentService', () => {
     });
 
     it('is idempotent for a number already on record', async () => {
+      prisma.user.findUnique.mockResolvedValue({ smsConsent: true });
       prisma.smsConsentEvent.findFirst.mockResolvedValue({
         id: 'e1',
         phoneNumber: '+14155550123',
@@ -262,7 +264,30 @@ describe('SmsConsentService', () => {
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
+    /**
+     * STOP then START. The old 'granted' event is still on file, but the
+     * revocation set smsConsent false and START deliberately does not restore
+     * it. Skipping on history alone would leave the user unblocked at the
+     * carrier yet permanently unable to receive a code.
+     */
+    it('records fresh consent after STOP then START', async () => {
+      prisma.user.findUnique.mockResolvedValue({ smsConsent: false });
+      prisma.smsConsentEvent.findFirst.mockResolvedValue({
+        id: 'old-grant',
+        phoneNumber: '+14155550123',
+      });
+      await service.recordConsentIfMissing('u1', '+14155550123', {
+        source: 'verify_phone_screen',
+      });
+      expect(prisma.$transaction).toHaveBeenCalled();
+      const data = prisma.user.update.mock.calls[0][0].data;
+      expect(data.smsConsent).toBe(true);
+      // Still must not undo an opt-out as a side effect.
+      expect(data).not.toHaveProperty('smsOptedOut');
+    });
+
     it('records again when the number has changed', async () => {
+      prisma.user.findUnique.mockResolvedValue({ smsConsent: true });
       prisma.smsConsentEvent.findFirst
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce({ phoneNumber: '+14155550999' });

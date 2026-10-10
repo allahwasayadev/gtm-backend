@@ -172,6 +172,11 @@ export class SmsConsentService {
     phoneNumber: string,
     ctx: ConsentContext,
   ): Promise<void> {
+    const current = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { smsConsent: true },
+    });
+
     const existing = await this.prisma.smsConsentEvent.findFirst({
       where: { userId, action: 'granted', phoneNumber },
       orderBy: { createdAt: 'desc' },
@@ -184,8 +189,18 @@ export class SmsConsentService {
       select: { phoneNumber: true },
     });
 
-    // Already on record for this number, and it is the most recent grant.
-    if (existing && latestGrant?.phoneNumber === phoneNumber) {
+    // Skip only when consent is CURRENTLY held for this very number.
+    //
+    // The historical grant alone is not enough. After STOP then START, an old
+    // 'granted' event is still on file while smsConsent has been set false by
+    // the revocation — so checking history alone would skip recording, and
+    // assertMaySend would then block the send forever. The user would be
+    // unblocked at the carrier yet permanently unable to get a code.
+    if (
+      current?.smsConsent &&
+      existing &&
+      latestGrant?.phoneNumber === phoneNumber
+    ) {
       return;
     }
 
