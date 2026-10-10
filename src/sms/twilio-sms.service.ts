@@ -8,24 +8,49 @@ import { isTestNumber } from './sms-test-mode';
 import { isUsableIdentifier, isUsableSecret } from './twilio-credentials';
 
 /**
- * Outgoing message templates.
- *
- * Deliberately short: brand, code, expiry. No URL — a link in a verification
+ * Outgoing message templates. No URL in either: a link in a verification
  * message trains users to click links in texts, and TCR treats embedded links
  * in a 2FA campaign as a risk factor.
+ */
+
+/**
+ * Phone verification code.
  *
- * NOTE: these no longer carry "Reply STOP to opt out, HELP for help", which
- * the approved campaign's sample messages DO carry. Twilio's Advanced Opt-Out
- * still answers STOP and HELP on the inbound side, so opt-out continues to
- * work — but live traffic now differs from the approved samples. The campaign
- * description and samples must be updated and accepted before these ship.
+ * Byte-for-byte the template TCR approved for campaign CBEOQ40, with only the
+ * generated code substituted. Both approved samples normalise to this exact
+ * string, differing solely in their six digits:
+ *
+ *   "Ovrlap: Your verification code is 418207. It expires in 10 minutes. Do
+ *    not share this code. Reply STOP to opt out, HELP for help."
+ *
+ * The STOP/HELP sentence is a disclosure, not a handler: Twilio's Advanced
+ * Opt-Out answers those keywords, and the app's own replies stay disabled so
+ * nobody receives two responses to one keyword.
+ *
+ * Do not shorten this without first updating the campaign's sample messages
+ * and having the change accepted — live traffic must match what was approved.
  */
 export function verificationCodeMessage(code: string): string {
-  return `Ovrlap: Your verification code is ${code}. It expires in 10 minutes.`;
+  return (
+    `Ovrlap: Your verification code is ${code}. It expires in 10 minutes. ` +
+    `Do not share this code. Reply STOP to opt out, HELP for help.`
+  );
 }
 
+/**
+ * Password reset code.
+ *
+ * Deliberately says "password reset code" and is NOT disguised as a
+ * verification code. The approved description covers only mobile-number
+ * verification and states "no other SMS of any kind", so this message is
+ * outside the registered campaign and must not be sent until the description
+ * is updated and accepted. Mislabelling it would hide that, not fix it.
+ */
 export function passwordResetCodeMessage(code: string): string {
-  return `Ovrlap: Your password reset code is ${code}. It expires in 10 minutes.`;
+  return (
+    `Ovrlap: Your password reset code is ${code}. It expires in 10 minutes. ` +
+    `Do not share this code. Reply STOP to opt out, HELP for help.`
+  );
 }
 
 @Injectable()
