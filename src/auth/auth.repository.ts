@@ -15,9 +15,22 @@ export class AuthRepository {
   /**
    * Reset can start from an email address OR a phone number, so we need to
    * resolve either to the same account.
+   *
+   * A number is NOT unique across existing rows: accounts created before the
+   * uniqueness check at signup can share one. Resolving with an unordered
+   * findFirst therefore picked an arbitrary account, and if that happened to
+   * be the unverified one, reset-by-phone silently did nothing.
+   *
+   * Verified accounts win, then the oldest. A reset code can only ever be sent
+   * to a number the owner has proved they control, so the verified holder is
+   * the only sensible answer; the tiebreak keeps it deterministic rather than
+   * dependent on scan order.
    */
   async findUserByPhoneNumber(phoneNumber: string): Promise<User | null> {
-    return this.prisma.user.findFirst({ where: { phoneNumber } });
+    return this.prisma.user.findFirst({
+      where: { phoneNumber },
+      orderBy: [{ isPhoneVerified: 'desc' }, { createdAt: 'asc' }],
+    });
   }
 
   /** Used only to reclaim an unactivated signup that has passed its TTL. */
