@@ -1,54 +1,116 @@
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { getTwilioSmsConfig, TwilioSmsConfig } from './twilio.config';
+import { isTestNumber } from './sms-test-mode';
+import { isUsableIdentifier, isUsableSecret } from './twilio-credentials';
+
+/**
+ * Outgoing message templates. No URL in either: a link in a verification
+ * message trains users to click links in texts, and TCR treats embedded links
+ * in a 2FA campaign as a risk factor.
+ */
+
+/**
+ * Phone verification code.
+ *
+ * Byte-for-byte the template TCR approved for campaign CBEOQ40, with only the
+ * generated code substituted. Both approved samples normalise to this exact
+ * string, differing solely in their six digits:
+ *
+ *   "Ovrlap: Your verification code is 418207. It expires in 10 minutes. Do
+ *    not share this code. Reply STOP to opt out, HELP for help."
+ *
+ * The STOP/HELP sentence is a disclosure, not a handler: Twilio's Advanced
+ * Opt-Out answers those keywords, and the app's own replies stay disabled so
+ * nobody receives two responses to one keyword.
+ *
+ * Do not shorten this without first updating the campaign's sample messages
+ * and having the change accepted — live traffic must match what was approved.
+ */
+export function verificationCodeMessage(code: string): string {
+  return (
+    `Ovrlap: Your verification code is ${code}. It expires in 10 minutes. ` +
+    `Do not share this code. Reply STOP to opt out, HELP for help.`
+  );
+}
+
+/**
+ * Password reset code.
+ *
+ * Deliberately says "password reset code" and is NOT disguised as a
+ * verification code. The approved description covers only mobile-number
+ * verification and states "no other SMS of any kind", so this message is
+ * outside the registered campaign and must not be sent until the description
+ * is updated and accepted. Mislabelling it would hide that, not fix it.
+ */
+export function passwordResetCodeMessage(code: string): string {
+  return (
+    `Ovrlap: Your password reset code is ${code}. It expires in 10 minutes. ` +
+    `Do not share this code. Reply STOP to opt out, HELP for help.`
+  );
+}
 
 @Injectable()
 export class TwilioSmsService {
   private readonly logger = new Logger(TwilioSmsService.name);
 
   async sendVerificationCode(phoneNumber: string, code: string): Promise<void> {
-    const config = getTwilioSmsConfig();
-    this.assertConfigured(config);
-
-    const body = new URLSearchParams();
-    body.set('To', phoneNumber);
-    body.set(
-      'Body',
-      `Ovrlap: Your verification code is ${code}. It expires in 10 minutes. Do not share this code.`,
-    );
-    if (config.messagingServiceSid) {
-      body.set('MessagingServiceSid', config.messagingServiceSid);
-    } else if (config.fromPhoneNumber) {
-      body.set('From', config.fromPhoneNumber);
+    // Allow-listed test numbers never reach Twilio. The code is still stored,
+    // hashed and checked on submission — see sms-test-mode.ts.
+    if (isTestNumber(phoneNumber)) {
+      this.logger.warn(
+        `[SMS TEST MODE] Suppressed outbound verification SMS to an ` +
+          `allow-listed test number. The code is still verified normally.`,
+      );
+      return;
     }
 
-    const authHeader = Buffer.from(
-      `${config.accountSid}:${config.authToken}`,
-    ).toString('base64');
+    await this.dispatch(phoneNumber, verificationCodeMessage(code), {
+      throwOnFailure: true,
+    });
+  }
 
-    const response = await fetch(
-      `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Messages.json`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Basic ${authHeader}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body,
-      },
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      this.logger.error(
-        `Twilio SMS send failed (${response.status}): ${errorText.slice(0, 500)}`,
+  /**
+   * Password reset code.
+   *
+   * Only ever sent to a number the account has already VERIFIED, and only
+   * after assertMaySend() has cleared consent and opt-out state.
+   */
+  async sendPasswordResetCode(
+    phoneNumber: string,
+    code: string,
+  ): Promise<void> {
+    if (isTestNumber(phoneNumber)) {
+      this.logger.warn(
+        `[SMS TEST MODE] Suppressed outbound reset SMS to an allow-listed ` +
+          `test number. The code is still verified normally.`,
       );
-      throw new InternalServerErrorException(
-        'Failed to send verification code via SMS',
-      );
+      return;
     }
+
+    await this.dispatch(phoneNumber, passwordResetCodeMessage(code), {
+      throwOnFailure: true,
+    });
   }
 
   async sendSms(phoneNumber: string, message: string): Promise<void> {
+    if (isTestNumber(phoneNumber)) {
+      this.logger.warn(
+        '[SMS TEST MODE] Suppressed outbound SMS to an allow-listed test number.',
+      );
+      return;
+    }
+    await this.dispatch(phoneNumber, message, { throwOnFailure: false });
+  }
+
+  private async dispatch(
+    phoneNumber: string,
+    message: string,
+    opts: { throwOnFailure: boolean },
+  ): Promise<void> {
     const config = getTwilioSmsConfig();
     this.assertConfigured(config);
 
@@ -66,7 +128,7 @@ export class TwilioSmsService {
     ).toString('base64');
 
     const response = await fetch(
-      `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Messages.json`,
+      `${config.apiBaseUrl}/2010-04-01/Accounts/${config.accountSid}/Messages.json`,
       {
         method: 'POST',
         headers: {
@@ -82,15 +144,32 @@ export class TwilioSmsService {
       this.logger.error(
         `Twilio SMS send failed (${response.status}): ${errorText.slice(0, 500)}`,
       );
+      if (opts.throwOnFailure) {
+        throw new InternalServerErrorException(
+          'Failed to send verification code via SMS',
+        );
+      }
     }
   }
 
   private assertConfigured(config: TwilioSmsConfig): void {
+    // Placeholder values (production has shipped the literal "none") must be
+    // treated as unconfigured. Otherwise the app builds a request against
+    // /Accounts/none/Messages.json and reports a confusing upstream failure
+    // instead of an honest configuration error.
+    const hasSender =
+      isUsableIdentifier(config.messagingServiceSid) ||
+      isUsableIdentifier(config.fromPhoneNumber);
+
     if (
-      !config.accountSid ||
-      !config.authToken ||
-      (!config.fromPhoneNumber && !config.messagingServiceSid)
+      !isUsableIdentifier(config.accountSid) ||
+      !isUsableSecret(config.authToken) ||
+      !hasSender
     ) {
+      this.logger.error(
+        'Twilio SMS is not configured: one or more credentials are missing ' +
+          'or set to a placeholder value.',
+      );
       throw new InternalServerErrorException(
         'Twilio SMS service is not configured',
       );

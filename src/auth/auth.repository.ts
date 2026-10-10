@@ -12,6 +12,19 @@ export class AuthRepository {
     });
   }
 
+  /**
+   * Reset can start from an email address OR a phone number, so we need to
+   * resolve either to the same account.
+   */
+  async findUserByPhoneNumber(phoneNumber: string): Promise<User | null> {
+    return this.prisma.user.findFirst({ where: { phoneNumber } });
+  }
+
+  /** Used only to reclaim an unactivated signup that has passed its TTL. */
+  async deleteUser(userId: string): Promise<void> {
+    await this.prisma.user.delete({ where: { id: userId } });
+  }
+
   async createUser(data: {
     name: string;
     email: string;
@@ -19,6 +32,8 @@ export class AuthRepository {
     company?: string;
     roles: UserRole[];
     phoneNumber?: string;
+    /** Opt-in reclaim marker; set only by the SMS-first signup flow. */
+    pendingSignupSince?: Date;
   }): Promise<User> {
     return this.prisma.user.create({
       data,
@@ -38,7 +53,7 @@ export class AuthRepository {
       emailVerificationCode?: string | null;
       emailVerificationCodeExpiresAt?: Date | null;
       emailVerificationAttempts?: number;
-      lastVerificationCodeSentAt?: Date;
+      lastVerificationCodeSentAt?: Date | null;
     },
   ): Promise<User> {
     return this.prisma.user.update({
@@ -141,6 +156,10 @@ export class AuthRepository {
       where: { id: userId },
       data: {
         isPhoneVerified: true,
+        // Activation ends the pending state permanently. A later number change
+        // flips isPhoneVerified back to false, but this stays null, which is
+        // what keeps an established account out of the reclaim path.
+        pendingSignupSince: null,
         phoneVerificationCode: null,
         phoneVerificationCodeExpiresAt: null,
         phoneVerificationAttempts: 0,

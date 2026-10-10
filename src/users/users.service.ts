@@ -21,12 +21,18 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ConnectionsRepository } from '../connections/connections.repository';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TwilioSmsService } from '../sms/twilio-sms.service';
+import { SmsConsentService } from '../sms/sms-consent.service';
+import { SmsConsentSource } from '../sms/sms-consent.constants';
+import { testCodeFor } from '../sms/sms-test-mode';
 
 const PHONE_VERIFICATION_CODE_EXPIRY_MINUTES = 10;
 const PHONE_VERIFICATION_RESEND_COOLDOWN_SECONDS = 60;
 const MAX_PHONE_VERIFICATION_ATTEMPTS = 5;
 
 type UserWithPhoneVerification = User & {
+  smsConsent?: boolean;
+  smsConsentAt?: Date | null;
+  smsOptedOut?: boolean;
   phoneNumber?: string | null;
   isPhoneVerified?: boolean;
   phoneVerificationCode?: string | null;
@@ -44,6 +50,9 @@ export interface UpdatedProfileResponse {
   hasCompletedOnboarding: boolean;
   phoneNumber: string | null;
   isPhoneVerified: boolean;
+  smsConsent?: boolean;
+  smsConsentAt?: Date | null;
+  smsOptedOut?: boolean;
   createdAt: Date;
   token?: string;
 }
@@ -77,6 +86,7 @@ export class UsersService {
     private connectionsRepository: ConnectionsRepository,
     private notificationsService: NotificationsService,
     private twilioSmsService: TwilioSmsService,
+    private smsConsentService: SmsConsentService,
   ) {}
 
   async getProfile(userId: string) {
@@ -96,6 +106,10 @@ export class UsersService {
       hasCompletedOnboarding: user.hasCompletedOnboarding,
       phoneNumber: user.phoneNumber,
       isPhoneVerified: Boolean(user.isPhoneVerified),
+      smsConsent: Boolean((user as { smsConsent?: boolean }).smsConsent),
+      smsConsentAt:
+        (user as { smsConsentAt?: Date | null }).smsConsentAt ?? null,
+      smsOptedOut: Boolean((user as { smsOptedOut?: boolean }).smsOptedOut),
       createdAt: user.createdAt,
     };
   }
@@ -189,6 +203,7 @@ export class UsersService {
   async sendPhoneVerificationCode(
     userId: string,
     dto: SendPhoneVerificationCodeDto,
+    requestContext?: { ipAddress?: string | null; userAgent?: string | null },
   ): Promise<SendPhoneVerificationCodeResponse> {
     const user = (await this.usersRepository.findById(
       userId,
@@ -225,7 +240,19 @@ export class UsersService {
       }
     }
 
-    const code = this.generateVerificationCode();
+    // Record consent when the profile screen supplies it, then gate the send.
+    // The profile path previously sent with no disclosure and no record.
+    if (dto.smsConsent === true) {
+      await this.smsConsentService.recordConsent(userId, phoneNumber, {
+        source: SmsConsentSource.ProfileSettings,
+        ipAddress: requestContext?.ipAddress,
+        userAgent: requestContext?.userAgent,
+      });
+    }
+
+    await this.smsConsentService.assertMaySend(userId, phoneNumber);
+
+    const code = testCodeFor(phoneNumber) ?? this.generateVerificationCode();
     const codeHash = this.hashCode(code);
     const expiresAt = new Date(
       Date.now() + PHONE_VERIFICATION_CODE_EXPIRY_MINUTES * 60 * 1000,
@@ -248,10 +275,53 @@ export class UsersService {
       isPhoneVerified: false,
       expiresAt,
     };
-    if (process.env.LOG_PHONE_VERIFICATION_CODE === 'true') {
+    if (
+      process.env.LOG_PHONE_VERIFICATION_CODE === 'true' &&
+      process.env.NODE_ENV !== 'production'
+    ) {
       (response as SendPhoneVerificationCodeResponse & { code?: string }).code = code;
     }
     return response;
+  }
+
+  /**
+   * In-app SMS consent withdrawal.
+   *
+   * Necessary because a user who has never received a text cannot reply STOP,
+   * and — on Twilio Verify managed senders — a texted STOP never reaches our
+   * webhook at all. This is the only revocation path we fully control.
+   *
+   * Revokes for every account holding the number, matching the semantics of a
+   * texted STOP: consent belongs to the handset, and over-suppressing is the
+   * safe direction for compliance.
+   */
+  async withdrawSmsConsent(userId: string): Promise<{
+    message: string;
+    smsConsent: boolean;
+    smsOptedOut: boolean;
+  }> {
+    const user = (await this.usersRepository.findById(
+      userId,
+    )) as UserWithPhoneVerification | null;
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.phoneNumber) {
+      throw new BadRequestException('No phone number on file.');
+    }
+
+    await this.smsConsentService.recordOptOut(
+      user.phoneNumber,
+      SmsConsentSource.ProfileSettings,
+    );
+
+    return {
+      message:
+        'SMS consent withdrawn. Ovrlap will not send any further text messages to this number.',
+      smsConsent: false,
+      smsOptedOut: true,
+    };
   }
 
   async verifyPhoneVerificationCode(

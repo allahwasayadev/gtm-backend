@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { TwilioSmsService } from './twilio-sms.service';
 import { SmsWebhookService } from './sms-webhook.service';
+import { SmsConsentService } from './sms-consent.service';
 import { SmsController } from './sms.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 
@@ -8,7 +9,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 @Module({
   imports: [PrismaModule],
   controllers: [SmsController],
-  providers: [TwilioSmsService, SmsWebhookService],
-  exports: [TwilioSmsService, SmsWebhookService],
+  providers: [TwilioSmsService, SmsWebhookService, SmsConsentService],
+  exports: [TwilioSmsService, SmsWebhookService, SmsConsentService],
 })
 export class SmsModule {}

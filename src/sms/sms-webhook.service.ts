@@ -1,68 +1,146 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
 import { TwilioSmsService } from './twilio-sms.service';
+import { SmsConsentService } from './sms-consent.service';
+import { SmsConsentSource } from './sms-consent.constants';
 
-const STOP_KEYWORDS = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT'];
-const HELP_KEYWORDS = ['HELP'];
+/**
+ * CTIA-standard keywords. Twilio's Advanced Opt-Out also handles these at its
+ * edge; we mirror them so our own consent record never disagrees with Twilio's.
+ */
+const STOP_KEYWORDS = [
+  'STOP',
+  'STOPALL',
+  'UNSUBSCRIBE',
+  'CANCEL',
+  'END',
+  'QUIT',
+  'OPTOUT',
+  'OPT-OUT',
+];
+const START_KEYWORDS = ['START', 'UNSTOP', 'YES', 'RESUME', 'OPTIN', 'OPT-IN'];
+const HELP_KEYWORDS = ['HELP', 'INFO'];
+
+/**
+ * Whether Ovrlap sends its own keyword replies.
+ *
+ * Default OFF. Twilio's standard keyword processing already answers STOP,
+ * START and HELP on the sender, so replying from here as well would send the
+ * user two messages for one keyword. It would also contradict the published
+ * SMS Terms, which state that those replies come from the messaging provider
+ * and that their wording is set by the provider.
+ *
+ * Enable this ONLY if Twilio's default handling is turned off for the sender
+ * (Advanced Opt-Out configured to defer), so exactly one reply is produced.
+ */
+function ownKeywordRepliesEnabled(): boolean {
+  return process.env.SMS_KEYWORD_REPLIES === 'true';
+}
+
+/** Brand-identified replies, used only when OWN_KEYWORD_REPLIES is enabled. */
+const STOP_REPLY =
+  'Ovrlap: You are unsubscribed from Ovrlap account verification messages ' +
+  'and will receive no further texts. Reply START to resubscribe. ' +
+  'Reply HELP for help.';
+
+const START_REPLY =
+  'Ovrlap: You are resubscribed to Ovrlap account verification messages. ' +
+  'Msg frequency varies. Msg & data rates may apply. Reply STOP to opt out, ' +
+  'HELP for help.';
+
+const HELP_REPLY =
+  'Ovrlap account verification. Support: support@ovrlap.app. ' +
+  'Msg frequency varies. Msg & data rates may apply. ' +
+  'Reply STOP to unsubscribe.';
 
 @Injectable()
 export class SmsWebhookService {
   private readonly logger = new Logger(SmsWebhookService.name);
 
   constructor(
-    private prisma: PrismaService,
     private twilioSmsService: TwilioSmsService,
+    private smsConsentService: SmsConsentService,
   ) {}
 
   async handleInbound(from: string, text: string): Promise<void> {
     if (!from) return;
 
-    const upperText = text.toUpperCase().trim();
+    const keyword = this.extractKeyword(text);
+    if (!keyword) return;
 
-    if (STOP_KEYWORDS.includes(upperText)) {
+    if (STOP_KEYWORDS.includes(keyword)) {
       await this.handleStop(from);
       return;
     }
 
-    if (HELP_KEYWORDS.includes(upperText)) {
+    if (START_KEYWORDS.includes(keyword)) {
+      await this.handleStart(from);
+      return;
+    }
+
+    if (HELP_KEYWORDS.includes(keyword)) {
       await this.handleHelp(from);
       return;
     }
   }
 
+  /**
+   * Take the first word and strip surrounding punctuation, so "STOP.",
+   * "stop please" and "Stop!" all resolve to STOP. An exact-match check
+   * silently missed these and left our record out of step with Twilio's.
+   */
+  private extractKeyword(text: string): string | null {
+    const first = text.trim().split(/\s+/)[0] ?? '';
+    const cleaned = first.replace(/^[^A-Za-z-]+|[^A-Za-z-]+$/g, '');
+    return cleaned ? cleaned.toUpperCase() : null;
+  }
+
   private async handleStop(phoneNumber: string): Promise<void> {
-    this.logger.log(`STOP received from ${phoneNumber}`);
+    this.logger.log('STOP received; revoking consent for the sending number');
 
-    // Mark all users with this phone number as opted out
-    await this.prisma.user.updateMany({
-      where: { phoneNumber },
-      data: { smsOptedOut: true },
-    });
+    await this.smsConsentService.recordOptOut(
+      phoneNumber,
+      SmsConsentSource.SmsKeyword,
+    );
 
-    try {
-      await this.twilioSmsService.sendSms(
-        phoneNumber,
-        'You are unsubscribed and will no longer receive messages.',
-      );
-    } catch (error) {
-      // Twilio may block sends to opted-out numbers; that's expected
-      this.logger.warn(
-        `Failed to send STOP confirmation to ${phoneNumber}: ${error instanceof Error ? error.message : 'unknown'}`,
-      );
-    }
+    await this.safeReply(phoneNumber, STOP_REPLY, 'STOP confirmation');
+  }
+
+  private async handleStart(phoneNumber: string): Promise<void> {
+    this.logger.log('START received; restoring consent for the sending number');
+
+    await this.smsConsentService.recordResubscribe(
+      phoneNumber,
+      SmsConsentSource.SmsKeyword,
+    );
+
+    await this.safeReply(phoneNumber, START_REPLY, 'START confirmation');
   }
 
   private async handleHelp(phoneNumber: string): Promise<void> {
-    this.logger.log(`HELP received from ${phoneNumber}`);
+    this.logger.log('HELP received');
+    await this.safeReply(phoneNumber, HELP_REPLY, 'HELP reply');
+  }
 
-    try {
-      await this.twilioSmsService.sendSms(
-        phoneNumber,
-        'Ovrlap support: support@ovrlap.app',
+  private async safeReply(
+    phoneNumber: string,
+    message: string,
+    label: string,
+  ): Promise<void> {
+    if (!ownKeywordRepliesEnabled()) {
+      // Twilio's standard keyword processing answers this. Sending our own
+      // would duplicate it.
+      this.logger.log(
+        `${label} not sent by Ovrlap — provider keyword handling is authoritative`,
       );
+      return;
+    }
+    try {
+      await this.twilioSmsService.sendSms(phoneNumber, message);
     } catch (error) {
+      // Twilio blocks sends to opted-out numbers; for STOP that is expected,
+      // since Advanced Opt-Out will have sent its own confirmation.
       this.logger.warn(
-        `Failed to send HELP response to ${phoneNumber}: ${error instanceof Error ? error.message : 'unknown'}`,
+        `Failed to send ${label}: ${error instanceof Error ? error.message : 'unknown'}`,
       );
     }
   }
