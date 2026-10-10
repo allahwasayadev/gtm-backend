@@ -81,8 +81,17 @@ export class AuthController {
   }
 
   @Post('activation/resend')
-  async resendActivation(@Body() dto: ActivationTokenDto) {
-    return this.authService.resendActivationCode(dto.activationToken);
+  async requestActivationCode(
+    @Body() dto: ActivationTokenDto,
+    @Request() req: any,
+  ) {
+    return this.authService.requestActivationCode(dto.activationToken, {
+      ipAddress:
+        (req.headers?.['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+        req.ip ||
+        null,
+      userAgent: (req.headers?.['user-agent'] as string) ?? null,
+    });
   }
 
   @Post('activation/verify')

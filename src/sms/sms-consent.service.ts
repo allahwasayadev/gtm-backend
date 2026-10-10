@@ -156,6 +156,72 @@ export class SmsConsentService {
    * consent for this number. Keyword replies (STOP/HELP confirmations) are
    * exempt by design and do not call this.
    */
+  /**
+   * Record consent for a number only if we do not already hold it.
+   *
+   * Used where the user's affirmative action is a button press next to the
+   * consent wording, rather than a checkbox. Idempotent, so pressing twice
+   * does not litter the audit trail with duplicates.
+   *
+   * It deliberately does NOT clear an opt-out — unlike recordConsent, which
+   * treats a fresh tick as resubscribing. Callers must refuse an opted-out
+   * number before reaching this.
+   */
+  async recordConsentIfMissing(
+    userId: string,
+    phoneNumber: string,
+    ctx: ConsentContext,
+  ): Promise<void> {
+    const existing = await this.prisma.smsConsentEvent.findFirst({
+      where: { userId, action: 'granted', phoneNumber },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+
+    const latestGrant = await this.prisma.smsConsentEvent.findFirst({
+      where: { userId, action: 'granted' },
+      orderBy: { createdAt: 'desc' },
+      select: { phoneNumber: true },
+    });
+
+    // Already on record for this number, and it is the most recent grant.
+    if (existing && latestGrant?.phoneNumber === phoneNumber) {
+      return;
+    }
+
+    const now = new Date();
+    await this.prisma.$transaction([
+      this.prisma.smsConsentEvent.create({
+        data: {
+          userId,
+          phoneNumber,
+          action: 'granted',
+          consentText: SMS_CONSENT_TEXT,
+          consentVersion: SMS_CONSENT_VERSION,
+          source: ctx.source,
+          useCase: SMS_USE_CASE,
+          ipAddress: ctx.ipAddress ?? null,
+          userAgent: ctx.userAgent ?? null,
+        },
+      }),
+      this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          smsConsent: true,
+          smsConsentAt: now,
+          smsConsentSource: ctx.source,
+          smsConsentVersion: SMS_CONSENT_VERSION,
+          // NOTE: smsOptedOut is intentionally left alone. A STOP must not be
+          // undone by this path.
+        },
+      }),
+    ]);
+
+    this.logger.log(
+      `SMS consent captured at point of send (user=${userId}, source=${ctx.source})`,
+    );
+  }
+
   async assertMaySend(userId: string, phoneNumber: string): Promise<void> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },

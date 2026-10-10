@@ -28,6 +28,7 @@ describe('AuthService — existing-user migration', () => {
   let service: AuthService;
   let repo: Record<string, jest.Mock>;
   let sms: Record<string, jest.Mock>;
+  let consent: Record<string, jest.Mock>;
 
   const LEGACY_NO_PHONE = {
     id: 'legacy-1',
@@ -55,6 +56,11 @@ describe('AuthService — existing-user migration', () => {
       deleteUser: jest.fn(),
     };
     sms = { sendVerificationCode: jest.fn().mockResolvedValue(undefined) };
+    consent = {
+      assertMaySend: jest.fn().mockResolvedValue(undefined),
+      recordConsent: jest.fn().mockResolvedValue(undefined),
+      recordConsentIfMissing: jest.fn().mockResolvedValue(undefined),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -69,10 +75,7 @@ describe('AuthService — existing-user migration', () => {
         },
         { provide: EmailService, useValue: {} },
         { provide: TwilioSmsService, useValue: sms },
-        {
-          provide: SmsConsentService,
-          useValue: { assertMaySend: jest.fn(), recordConsent: jest.fn() },
-        },
+        { provide: SmsConsentService, useValue: consent },
       ],
     }).compile();
 
@@ -190,11 +193,64 @@ describe('AuthService — existing-user migration', () => {
     });
   });
 
+  /**
+   * Legacy accounts have a saved number but no consent record, so the press of
+   * "Text me a code" IS the consent action and must be captured — otherwise
+   * assertMaySend refuses and the user is stranded with no way forward.
+   */
+  describe('consent is captured at the point of send', () => {
+    beforeEach(() => repo.findUserById.mockResolvedValue(LEGACY_WITH_PHONE));
+
+    it('records consent for the saved number before sending', async () => {
+      await service.requestActivationCode('ACTIVATION-TOKEN');
+      expect(consent.recordConsentIfMissing).toHaveBeenCalledWith(
+        'legacy-2',
+        '+14155550123',
+        expect.objectContaining({ source: 'verify_phone_screen' }),
+      );
+      expect(sms.sendVerificationCode).toHaveBeenCalled();
+    });
+
+    it('records it BEFORE the send, not after', async () => {
+      const order: string[] = [];
+      consent.recordConsentIfMissing.mockImplementation(async () => {
+        order.push('consent');
+      });
+      sms.sendVerificationCode.mockImplementation(async () => {
+        order.push('send');
+      });
+      await service.requestActivationCode('ACTIVATION-TOKEN');
+      expect(order).toEqual(['consent', 'send']);
+    });
+
+    // STOP must survive this path. recordConsent clears smsOptedOut as a fresh
+    // opt-in, so writing consent first would silently undo the block.
+    it('refuses an opted-out number and writes NO consent', async () => {
+      repo.findUserById.mockResolvedValue({
+        ...LEGACY_WITH_PHONE,
+        smsOptedOut: true,
+      });
+      await expect(
+        service.requestActivationCode('ACTIVATION-TOKEN'),
+      ).rejects.toThrow(/opted out/i);
+      expect(consent.recordConsentIfMissing).not.toHaveBeenCalled();
+      expect(sms.sendVerificationCode).not.toHaveBeenCalled();
+    });
+
+    it('still refuses when there is no number on file', async () => {
+      repo.findUserById.mockResolvedValue(LEGACY_NO_PHONE);
+      await expect(
+        service.requestActivationCode('ACTIVATION-TOKEN'),
+      ).rejects.toThrow(/Add a mobile number/);
+      expect(consent.recordConsentIfMissing).not.toHaveBeenCalled();
+    });
+  });
+
   it('a code is only sent when explicitly requested', async () => {
     repo.findUserById.mockResolvedValue(LEGACY_WITH_PHONE);
     expect(sms.sendVerificationCode).not.toHaveBeenCalled();
 
-    await service.resendActivationCode('ACTIVATION-TOKEN');
+    await service.requestActivationCode('ACTIVATION-TOKEN');
     expect(sms.sendVerificationCode).toHaveBeenCalledTimes(1);
   });
 });

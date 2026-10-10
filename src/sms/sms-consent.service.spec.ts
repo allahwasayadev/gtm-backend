@@ -231,4 +231,45 @@ describe('SmsConsentService', () => {
       });
     });
   });
+
+  /**
+   * recordConsent treats a fresh opt-in as resubscribing and clears
+   * smsOptedOut. recordConsentIfMissing must NOT, because it runs at the
+   * point of send — if it cleared the flag, a STOP'd number would be silently
+   * unblocked by the very act of asking for a code.
+   */
+  describe('recordConsentIfMissing', () => {
+    it('never clears an opt-out', async () => {
+      prisma.smsConsentEvent.findFirst.mockResolvedValue(null);
+      await service.recordConsentIfMissing('u1', '+14155550123', {
+        source: 'verify_phone_screen',
+      });
+
+      const data = prisma.user.update.mock.calls[0][0].data;
+      expect(data.smsConsent).toBe(true);
+      expect(data).not.toHaveProperty('smsOptedOut');
+      expect(data).not.toHaveProperty('smsOptedOutAt');
+    });
+
+    it('is idempotent for a number already on record', async () => {
+      prisma.smsConsentEvent.findFirst.mockResolvedValue({
+        id: 'e1',
+        phoneNumber: '+14155550123',
+      });
+      await service.recordConsentIfMissing('u1', '+14155550123', {
+        source: 'verify_phone_screen',
+      });
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('records again when the number has changed', async () => {
+      prisma.smsConsentEvent.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ phoneNumber: '+14155550999' });
+      await service.recordConsentIfMissing('u1', '+14155550123', {
+        source: 'verify_phone_screen',
+      });
+      expect(prisma.$transaction).toHaveBeenCalled();
+    });
+  });
 });

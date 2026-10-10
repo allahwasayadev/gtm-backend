@@ -1,6 +1,7 @@
 import {
   Injectable,
   ConflictException,
+  ForbiddenException,
   UnauthorizedException,
   BadRequestException,
   HttpException,
@@ -315,8 +316,23 @@ export class AuthService {
     };
   }
 
-  /** Activation: resend to the number already on file. */
-  async resendActivationCode(activationToken: string) {
+  /**
+   * Activation: send a code to the number already on file.
+   *
+   * For a migrating user this is the FIRST send, and the press of the button
+   * is their affirmative consent action — the wording sits directly above it
+   * on the screen. Legacy accounts have a saved number but no consent record,
+   * so without capturing it here assertMaySend would refuse and the user
+   * would be stranded with no way forward.
+   *
+   * Order matters. An opted-out number is refused BEFORE any consent is
+   * written, because recordConsent deliberately clears smsOptedOut as a fresh
+   * opt-in — doing it the other way round would silently undo a STOP.
+   */
+  async requestActivationCode(
+    activationToken: string,
+    requestContext?: { ipAddress?: string | null; userAgent?: string | null },
+  ) {
     const user = await this.userFromActivationToken(activationToken);
     const phoneNumber = (user as { phoneNumber?: string }).phoneNumber;
 
@@ -325,6 +341,23 @@ export class AuthService {
         'Add a mobile number before requesting a code.',
       );
     }
+
+    // STOP stays STOP. Checked first and never written past.
+    if ((user as { smsOptedOut?: boolean }).smsOptedOut) {
+      throw new ForbiddenException(
+        'This number has opted out of Ovrlap SMS. Reply START to the last ' +
+          'Ovrlap message to resume, then try again.',
+      );
+    }
+
+    // Record the user's action for THIS number if we do not already hold it.
+    // assertMaySend also requires the latest grant to match the number, so a
+    // consent given for an older number does not carry over.
+    await this.smsConsentService.recordConsentIfMissing(user.id, phoneNumber, {
+      source: SmsConsentSource.VerifyPhoneScreen,
+      ipAddress: requestContext?.ipAddress,
+      userAgent: requestContext?.userAgent,
+    });
 
     const sent = await this.sendPhoneVerificationCode(user.id, phoneNumber);
     return {
