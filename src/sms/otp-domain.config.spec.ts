@@ -65,6 +65,28 @@ describe('OTP domain binding', () => {
       process.env.SMS_OTP_DOMAIN = value;
       expect(() => getOtpDomain()).toThrow(/bare hostname/);
     });
+
+    // WebOTP matches the "@host" line against the page's effective domain,
+    // which is defined for domain-format hosts only. An address literal has
+    // no effective domain, so the code silently never fills — the worst
+    // possible failure, because everything looks correct.
+    it.each([
+      ['127.0.0.1', 'loopback IPv4'],
+      ['192.168.0.103', 'a LAN address'],
+      ['10.0.0.1', 'a private address'],
+      ['::1', 'loopback IPv6'],
+      ['[::1]', 'bracketed IPv6'],
+      ['2001:db8::1', 'an IPv6 address'],
+      ['1.2.3.4', 'any IPv4'],
+    ])('refuses the IP literal %s (%s)', (value) => {
+      process.env.SMS_OTP_DOMAIN = value;
+      expect(() => getOtpDomain()).toThrow(/not an IP address/);
+    });
+
+    it('still accepts a hostname whose labels contain digits', () => {
+      process.env.SMS_OTP_DOMAIN = 'ovrlap-01.test.local';
+      expect(getOtpDomain()).toBe('ovrlap-01.test.local');
+    });
   });
 
   describe('the line itself', () => {

@@ -31,6 +31,25 @@ const logger = new Logger('OtpDomain');
 const HOSTNAME =
   /^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/;
 
+/**
+ * An IP literal, which WebOTP will not accept.
+ *
+ * The spec resolves the "@host" line against the page's *effective domain*,
+ * and that step is defined for domain-format hosts only — an address literal
+ * is not a domain, so a message bound to one never matches and never fills.
+ * https://wicg.github.io/web-otp/#sctn-discover-from-external-source
+ *
+ * Caught by the last label being all digits, which is also exactly why a
+ * real TLD cannot be numeric. Rejecting it here turns a silent
+ * never-fills into a startup error.
+ */
+const IPV4_LITERAL = /^\d+(\.\d+)*$/;
+const IPV6_LITERAL = /^\[?[0-9a-f:]*:[0-9a-f:]*\]?$/;
+
+function isIpLiteral(hostname: string): boolean {
+  return IPV4_LITERAL.test(hostname) || IPV6_LITERAL.test(hostname);
+}
+
 let warned = false;
 
 /**
@@ -46,6 +65,16 @@ export function getOtpDomain(): string | null {
   if (!raw) return null;
 
   const hostname = raw.toLowerCase();
+
+  if (isIpLiteral(hostname)) {
+    throw new Error(
+      `SMS_OTP_DOMAIN must be a domain name, not an IP address. WebOTP ` +
+        `matches the message against the page's effective domain, and an ` +
+        `address literal has none — the code would silently never fill. ` +
+        `Use a hostname that resolves to the host instead. ` +
+        `Received: ${JSON.stringify(raw)}`,
+    );
+  }
 
   if (!HOSTNAME.test(hostname)) {
     throw new Error(
