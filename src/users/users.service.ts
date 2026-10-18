@@ -4,6 +4,7 @@ import {
   NotFoundException,
   Logger,
   BadRequestException,
+  ForbiddenException,
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
@@ -152,8 +153,27 @@ export class UsersService {
       ...(typeof dto.name === 'string' ? { name: dto.name } : {}),
       ...(typeof dto.email === 'string' ? { email: dto.email } : {}),
       ...(typeof dto.company === 'string' ? { company: dto.company } : {}),
-      ...(Array.isArray(dto.roles) ? { roles: dto.roles } : {}),
     };
+
+    /* Admin membership is not a profile field. This endpoint is JWT-only, so
+       without this a signed-in user could PATCH themselves roles: [Admin] and
+       the next request would pass AdminAuthGuard, which trusts the roles the
+       JWT strategy reloads from the database. The profile form may change the
+       business roles and nothing else: a request asking for Admin from someone
+       who does not already hold it is refused outright, and an existing Admin
+       keeps it whatever the form posts (the form always sends a single business
+       role, which would otherwise demote them silently on save). */
+    if (Array.isArray(dto.roles)) {
+      const currentRoles: UserRole[] = user.roles ?? [];
+      const isAdmin = currentRoles.includes('Admin');
+      if (dto.roles.includes('Admin') && !isAdmin) {
+        throw new ForbiddenException(
+          'Admin access cannot be granted from the profile form.',
+        );
+      }
+      const businessRoles = dto.roles.filter((role) => role !== 'Admin');
+      updateData.roles = isAdmin ? [...businessRoles, 'Admin'] : businessRoles;
+    }
 
     if (typeof normalizedPhoneNumber !== 'undefined' && isPhoneNumberChanging) {
       updateData.phoneNumber = normalizedPhoneNumber;
