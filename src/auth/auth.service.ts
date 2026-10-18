@@ -261,13 +261,63 @@ export class AuthService {
     }
 
     const phoneNumber = (user as { phoneNumber?: string }).phoneNumber;
+    const outstanding = this.outstandingPhoneCode(user);
 
     return {
       email: user.email,
       phoneHint: phoneNumber ? this.maskPhoneNumber(phoneNumber) : null,
       needsPhoneNumber: !phoneNumber,
+      /**
+       * Is a code the user already holds still worth entering?
+       *
+       * This hand-off is usually reached by a session that has sent nothing,
+       * but it is also how a number change started on the profile screen
+       * ends up here: that send un-verified the session, and the next
+       * request 403'd into this. Saying so lets the activation screen ask
+       * for the code instead of texting a second one.
+       *
+       * Answered from the account's own row, not from anything the client
+       * says. A client marker is set when a send RESOLVES, and the 403 that
+       * brings the user here can arrive first; it also survives into the
+       * wrong account or number. The row cannot be stale or raced.
+       *
+       * The code and its hash never leave the server — only whether one is
+       * worth typing.
+       */
+      codeOutstanding: outstanding.outstanding,
+      codeExpiresAt: outstanding.expiresAt,
       activationToken: this.generateActivationToken(user.id, user.email),
     };
+  }
+
+  /**
+   * Is there a stored verification code this user could still successfully
+   * enter: present, unexpired, and with attempts left?
+   *
+   * Mirrors exactly the checks verifyPhoneCode() applies, so a code reported
+   * as outstanding is one that would actually be accepted. Nothing derived
+   * from it reveals the code.
+   */
+  private outstandingPhoneCode(user: unknown): {
+    outstanding: boolean;
+    expiresAt: Date | null;
+  } {
+    const row = user as {
+      phoneVerificationCode?: string | null;
+      phoneVerificationCodeExpiresAt?: Date | null;
+      phoneVerificationAttempts?: number | null;
+    };
+
+    const expiresAt = row.phoneVerificationCodeExpiresAt ?? null;
+    const attempts = row.phoneVerificationAttempts ?? 0;
+
+    const outstanding =
+      Boolean(row.phoneVerificationCode) &&
+      expiresAt !== null &&
+      new Date(expiresAt) > new Date() &&
+      attempts < MAX_PHONE_VERIFICATION_ATTEMPTS;
+
+    return { outstanding, expiresAt: outstanding ? expiresAt : null };
   }
 
   /**
