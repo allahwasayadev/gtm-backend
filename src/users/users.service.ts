@@ -264,6 +264,19 @@ export class UsersService {
       }
     }
 
+    /* STOP stays STOP, and it is checked before anything is written.
+       recordConsent deliberately clears smsOptedOut as a fresh opt-in, so
+       recording first and asserting afterwards silently undid a STOP that the
+       user had sent. The activation path has always checked in this order;
+       this one did not. Refusing here means no consent row, no verification
+       code and no message. */
+    if (user.smsOptedOut) {
+      throw new ForbiddenException(
+        'This number has opted out of Ovrlap SMS. Reply START to the last ' +
+          'Ovrlap message to resume, then try again.',
+      );
+    }
+
     // Record consent when the profile screen supplies it, then gate the send.
     // The profile path previously sent with no disclosure and no record.
     if (dto.smsConsent === true) {
