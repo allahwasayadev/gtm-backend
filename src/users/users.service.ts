@@ -19,6 +19,10 @@ import {
   VerifyPhoneVerificationCodeDto,
 } from './dto';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  canonicalizePhoneNumber,
+  US_COUNTRY_CODE,
+} from '../common/utils/phone.util';
 import { ConnectionsRepository } from '../connections/connections.repository';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TwilioSmsService } from '../sms/twilio-sms.service';
@@ -524,16 +528,21 @@ export class UsersService {
     return crypto.createHash('sha256').update(code).digest('hex');
   }
 
+  /**
+   * Canonical E.164, or a 400 the user can act on. Same rule as signup and
+   * activation — see common/utils/phone.util.ts. Ten digits are read as a US
+   * number; an explicit country code is honoured, so a profile that already
+   * holds a non-US number can still be saved.
+   */
   private normalizePhoneNumber(phoneNumber: string): string | null {
-    const trimmed = phoneNumber.trim();
-    if (!trimmed) {
+    if (!phoneNumber.trim()) {
       return null;
     }
 
-    const normalized = trimmed.replace(/[\s().-]/g, '');
-    if (!/^\+[1-9]\d{7,14}$/.test(normalized)) {
+    const normalized = canonicalizePhoneNumber(phoneNumber);
+    if (!normalized) {
       throw new BadRequestException(
-        'Phone number must be in E.164 format (example: +15551234567).',
+        `Enter a 10-digit US mobile number, or a full number with its country code (example: ${US_COUNTRY_CODE}5551234567).`,
       );
     }
 

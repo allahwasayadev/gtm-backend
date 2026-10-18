@@ -17,6 +17,10 @@ import { TwilioSmsService } from '../sms/twilio-sms.service';
 import { SmsConsentService } from '../sms/sms-consent.service';
 import { SmsConsentSource } from '../sms/sms-consent.constants';
 import { testCodeFor } from '../sms/sms-test-mode';
+import {
+  canonicalizePhoneNumber,
+  US_COUNTRY_CODE,
+} from '../common/utils/phone.util';
 import { SignupDto, LoginDto } from './dto';
 
 const VERIFICATION_CODE_EXPIRY_MINUTES = 15;
@@ -558,13 +562,22 @@ export class AuthService {
     return { message: neutralMessage };
   }
 
-  /** Resolve an email address or a mobile number to one account. */
+  /**
+   * Resolve an email address or a mobile number to one account.
+   *
+   * Canonicalises rather than validates. A ten-digit US number resolves the
+   * same account as the same number written +1XXXXXXXXXX, which is what the
+   * reset screens now collect. Unreadable input returns null so the caller
+   * answers with its neutral message: a format-specific 400 here would be an
+   * account-existence oracle, telling an attacker which identifiers are even
+   * considered.
+   */
   private async findUserByIdentifier(identifier: string) {
     const trimmed = identifier.trim();
     if (trimmed.includes('@')) {
       return this.authRepository.findUserByEmail(trimmed.toLowerCase());
     }
-    const normalized = this.normalizePhoneNumber(trimmed);
+    const normalized = canonicalizePhoneNumber(trimmed);
     if (!normalized) return null;
     return this.authRepository.findUserByPhoneNumber(normalized);
   }
@@ -674,12 +687,22 @@ export class AuthService {
     };
   }
 
+  /**
+   * Canonical E.164, or a 400 the user can act on.
+   *
+   * US entry is the default everywhere a user types their own number, so ten
+   * digits are read as +1XXXXXXXXXX. A number written with an explicit country
+   * code is still accepted as given, which is what keeps the non-US numbers on
+   * existing accounts usable. Only genuinely unreadable input is rejected —
+   * and a number with too many digits IS unreadable, never a prefix of itself.
+   */
   private normalizePhoneNumber(phoneNumber: string): string | null {
-    const trimmed = phoneNumber.trim();
-    if (!trimmed) return null;
-    const normalized = trimmed.replace(/[\s().-]/g, '');
-    if (!/^\+[1-9]\d{7,14}$/.test(normalized)) {
-      throw new BadRequestException('Phone number must be in E.164 format (example: +15551234567).');
+    if (!phoneNumber.trim()) return null;
+    const normalized = canonicalizePhoneNumber(phoneNumber);
+    if (!normalized) {
+      throw new BadRequestException(
+        `Enter a 10-digit US mobile number, or a full number with its country code (example: ${US_COUNTRY_CODE}5551234567).`,
+      );
     }
     return normalized;
   }
