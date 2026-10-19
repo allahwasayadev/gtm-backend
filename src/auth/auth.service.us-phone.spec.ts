@@ -64,6 +64,9 @@ describe('AuthService — US phone entry defaults to +1', () => {
       recordConsent: jest.fn().mockResolvedValue(undefined),
       recordConsentIfMissing: jest.fn().mockResolvedValue(undefined),
       assertMaySend: jest.fn().mockResolvedValue(undefined),
+      // setActivationPhone now asks whether the number being entered is
+      // stopped, before it writes anything. These fixtures are not.
+      isNumberStopped: jest.fn().mockResolvedValue(false),
     };
 
     const moduleRef = await Test.createTestingModule({
