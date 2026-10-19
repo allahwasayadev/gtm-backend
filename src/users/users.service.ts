@@ -250,20 +250,6 @@ export class UsersService {
       };
     }
 
-    if (user.lastPhoneVerificationCodeSentAt) {
-      const timeSinceLastSent =
-        (Date.now() - user.lastPhoneVerificationCodeSentAt.getTime()) / 1000;
-      if (timeSinceLastSent < PHONE_VERIFICATION_RESEND_COOLDOWN_SECONDS) {
-        const waitTime = Math.ceil(
-          PHONE_VERIFICATION_RESEND_COOLDOWN_SECONDS - timeSinceLastSent,
-        );
-        throw new HttpException(
-          `Please wait ${waitTime} seconds before requesting a new code.`,
-          HttpStatus.TOO_MANY_REQUESTS,
-        );
-      }
-    }
-
     /* STOP stays STOP, and it is checked before anything is written.
        recordConsent deliberately clears smsOptedOut as a fresh opt-in, so
        recording first and asserting afterwards silently undid a STOP the user
@@ -279,6 +265,20 @@ export class UsersService {
         'This number has opted out of Ovrlap SMS. Reply START to the last ' +
           'Ovrlap message to resume, then try again.',
       );
+    }
+
+    if (user.lastPhoneVerificationCodeSentAt) {
+      const timeSinceLastSent =
+        (Date.now() - user.lastPhoneVerificationCodeSentAt.getTime()) / 1000;
+      if (timeSinceLastSent < PHONE_VERIFICATION_RESEND_COOLDOWN_SECONDS) {
+        const waitTime = Math.ceil(
+          PHONE_VERIFICATION_RESEND_COOLDOWN_SECONDS - timeSinceLastSent,
+        );
+        throw new HttpException(
+          `Please wait ${waitTime} seconds before requesting a new code.`,
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
     }
 
     // Record consent when the profile screen supplies it, then gate the send.
