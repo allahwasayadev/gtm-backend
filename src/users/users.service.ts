@@ -266,11 +266,15 @@ export class UsersService {
 
     /* STOP stays STOP, and it is checked before anything is written.
        recordConsent deliberately clears smsOptedOut as a fresh opt-in, so
-       recording first and asserting afterwards silently undid a STOP that the
-       user had sent. The activation path has always checked in this order;
-       this one did not. Refusing here means no consent row, no verification
-       code and no message. */
-    if (user.smsOptedOut) {
+       recording first and asserting afterwards silently undid a STOP the user
+       had sent. Refusing here means no consent row, no verification code and
+       no message.
+
+       The refusal is bound to the TARGET number, not to the account. A user
+       whose old number stopped must still be able to correct it to a different
+       number; what they must not be able to do is point back at the stopped
+       one and have it quietly reopened. */
+    if (await this.smsConsentService.isNumberStopped(phoneNumber)) {
       throw new ForbiddenException(
         'This number has opted out of Ovrlap SMS. Reply START to the last ' +
           'Ovrlap message to resume, then try again.',
@@ -332,6 +336,69 @@ export class UsersService {
    * texted STOP: consent belongs to the handset, and over-suppressing is the
    * safe direction for compliance.
    */
+  /**
+   * Re-consent from profile settings, for the number already on file.
+   *
+   * The published SMS terms say that after STOP you reply START and then tick
+   * the consent box in profile settings to start again — START clears the
+   * carrier stop, it does not restore consent inside the app. This is that
+   * second half, and without it a user who stopped and restarted could never
+   * receive a password reset code again.
+   *
+   * It records consent and nothing else: no message is sent, and no
+   * re-verification is demanded of a number that is already verified. A number
+   * whose latest event is still a STOP is refused before anything is written,
+   * so this cannot be used to walk over an active opt-out.
+   */
+  async grantSmsConsent(
+    userId: string,
+    requestContext?: { ipAddress?: string | null; userAgent?: string | null },
+  ): Promise<{
+    message: string;
+    smsConsent: boolean;
+    smsOptedOut: boolean;
+    phoneNumber: string;
+  }> {
+    const user = (await this.usersRepository.findById(
+      userId,
+    )) as UserWithPhoneVerification | null;
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.phoneNumber) {
+      throw new BadRequestException('No phone number on file.');
+    }
+
+    if (!user.isPhoneVerified) {
+      // An unverified number captures consent on the send-a-code step instead,
+      // where the wording sits directly above the button.
+      throw new BadRequestException(
+        'Verify this number first; consent is captured when the code is requested.',
+      );
+    }
+
+    if (await this.smsConsentService.isNumberStopped(user.phoneNumber)) {
+      throw new ForbiddenException(
+        'This number has opted out of Ovrlap SMS. Reply START to the last ' +
+          'Ovrlap message to resume, then agree again here.',
+      );
+    }
+
+    await this.smsConsentService.recordConsent(userId, user.phoneNumber, {
+      source: SmsConsentSource.ProfileSettings,
+      ipAddress: requestContext?.ipAddress,
+      userAgent: requestContext?.userAgent,
+    });
+
+    return {
+      message: 'Thanks — Ovrlap can send account security codes to this number again.',
+      smsConsent: true,
+      smsOptedOut: false,
+      phoneNumber: user.phoneNumber,
+    };
+  }
+
   async withdrawSmsConsent(userId: string): Promise<{
     message: string;
     smsConsent: boolean;

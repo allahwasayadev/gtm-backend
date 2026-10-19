@@ -346,6 +346,18 @@ export class AuthService {
       throw new ConflictException('Mobile number already in use');
     }
 
+    /* STOP belongs to the number, and recordConsent below clears it as a fresh
+       opt-in. Without this check, "Use a different number" could be pointed
+       back at a number that had replied STOP and reopen it. A genuinely
+       different number is unaffected, which is what makes correcting a
+       mistyped number still work. */
+    if (await this.smsConsentService.isNumberStopped(normalized)) {
+      throw new ForbiddenException(
+        'This number has opted out of Ovrlap SMS. Reply START to the last ' +
+          'Ovrlap message to resume, then try again.',
+      );
+    }
+
     // Consent is recorded against the number actually being used, so a
     // corrected number gets its own record rather than inheriting the old one.
     await this.authRepository.updatePhoneVerification(user.id, {

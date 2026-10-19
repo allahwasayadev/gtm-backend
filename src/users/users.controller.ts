@@ -92,6 +92,15 @@ export class UsersController {
     return this.usersService.verifyPhoneVerificationCode(req.user.id, dto);
   }
 
+  /** Give SMS consent again from profile settings, for the number on file. */
+  @Post('profile/sms-consent')
+  async grantSmsConsent(@Request() req: any) {
+    return this.usersService.grantSmsConsent(req.user.id, {
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers?.['user-agent'] ?? null,
+    });
+  }
+
   /** Withdraw SMS consent from profile settings. */
   @Post('profile/sms-consent/withdraw')
   async withdrawSmsConsent(@Request() req: any) {

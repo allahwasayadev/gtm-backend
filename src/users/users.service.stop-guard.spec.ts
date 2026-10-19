@@ -23,8 +23,11 @@ import { SmsConsentService } from '../sms/sms-consent.service';
 describe('UsersService.sendPhoneVerificationCode — STOP survives the profile path', () => {
   let service: UsersService;
   let repo: { findById: jest.Mock; update: jest.Mock };
-  let consent: { recordConsent: jest.Mock; assertMaySend: jest.Mock };
+  let consent: { recordConsent: jest.Mock; assertMaySend: jest.Mock; isNumberStopped: jest.Mock };
   let sms: { sendVerificationCode: jest.Mock };
+
+  const STOPPED = '+14155550105';
+  const FRESH = '+14155550107';
 
   const optedOut = {
     id: 'u1',
@@ -43,7 +46,12 @@ describe('UsersService.sendPhoneVerificationCode — STOP survives the profile p
       findById: jest.fn().mockResolvedValue(optedOut),
       update: jest.fn().mockResolvedValue(optedOut),
     };
-    consent = { recordConsent: jest.fn(), assertMaySend: jest.fn() };
+    consent = {
+      recordConsent: jest.fn(),
+      assertMaySend: jest.fn(),
+      // STOP is per number: only the stopped one answers true.
+      isNumberStopped: jest.fn(async (n: string) => n === STOPPED),
+    };
     sms = { sendVerificationCode: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
@@ -62,9 +70,9 @@ describe('UsersService.sendPhoneVerificationCode — STOP survives the profile p
     service = moduleRef.get(UsersService);
   });
 
-  const send = (smsConsent?: boolean) =>
+  const send = (smsConsent?: boolean, phoneNumber: string = STOPPED) =>
     service.sendPhoneVerificationCode('u1', {
-      phoneNumber: '+14155550105',
+      phoneNumber,
       ...(smsConsent === undefined ? {} : { smsConsent }),
     } as never);
 
@@ -91,9 +99,86 @@ describe('UsersService.sendPhoneVerificationCode — STOP survives the profile p
 
   it('still sends for a user who has not opted out', async () => {
     repo.findById.mockResolvedValue({ ...optedOut, smsOptedOut: false });
-    await send(true);
+    await send(true, FRESH);
     expect(consent.recordConsent).toHaveBeenCalled();
     expect(consent.assertMaySend).toHaveBeenCalled();
     expect(sms.sendVerificationCode).toHaveBeenCalled();
+  });
+
+  /* STOP is a decision about a number, not a punishment on the account. A user
+     who stopped a number they mistyped has to be able to correct it. */
+  it('does not strand a correction to a genuinely different number', async () => {
+    await send(true, FRESH);
+    expect(consent.recordConsent).toHaveBeenCalledWith('u1', FRESH, expect.anything());
+    expect(sms.sendVerificationCode).toHaveBeenCalled();
+  });
+
+  it('asks about the target number, not the account flag', async () => {
+    await expect(send(true, STOPPED)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(consent.isNumberStopped).toHaveBeenCalledWith(STOPPED);
+  });
+});
+
+/**
+ * The second half of the published recovery path: START clears the carrier
+ * stop, and this is where consent is given again. It must record consent for
+ * the number on file without sending anything, and must refuse while a stop is
+ * still the latest thing recorded against that number.
+ */
+describe('UsersService.grantSmsConsent — re-consent from profile settings', () => {
+  const NUMBER = '+14155550142';
+  let service: UsersService;
+  let repo: { findById: jest.Mock };
+  let consent: { recordConsent: jest.Mock; isNumberStopped: jest.Mock };
+  let sms: { sendVerificationCode: jest.Mock };
+
+  const account = (over: Record<string, unknown> = {}) => ({
+    id: 'u1', email: 'dana@harbour.test', name: 'Dana Whitfield',
+    phoneNumber: NUMBER, isPhoneVerified: true, smsConsent: false,
+    smsOptedOut: false, ...over,
+  });
+
+  const build = async (stopped: boolean, user = account()) => {
+    repo = { findById: jest.fn().mockResolvedValue(user) };
+    consent = { recordConsent: jest.fn(), isNumberStopped: jest.fn().mockResolvedValue(stopped) };
+    sms = { sendVerificationCode: jest.fn() };
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        UsersService,
+        { provide: UsersRepository, useValue: repo },
+        { provide: JwtService, useValue: { sign: () => 'token' } },
+        { provide: PrismaService, useValue: {} },
+        { provide: ConnectionsRepository, useValue: { findAcceptedConnectionUserIds: jest.fn().mockResolvedValue([]) } },
+        { provide: NotificationsService, useValue: { createMany: jest.fn() } },
+        { provide: TwilioSmsService, useValue: sms },
+        { provide: SmsConsentService, useValue: consent },
+      ],
+    }).compile();
+    service = moduleRef.get(UsersService);
+  };
+
+  it('records consent for the number on file, with no message sent', async () => {
+    await build(false);
+    const res = await service.grantSmsConsent('u1');
+    expect(consent.recordConsent).toHaveBeenCalledWith('u1', NUMBER, expect.anything());
+    expect(sms.sendVerificationCode).not.toHaveBeenCalled();
+    expect(res.smsConsent).toBe(true);
+  });
+
+  it('refuses while the number is still stopped, and writes nothing', async () => {
+    await build(true);
+    await expect(service.grantSmsConsent('u1')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(consent.recordConsent).not.toHaveBeenCalled();
+  });
+
+  it('does not demand re-verification of an already verified number', async () => {
+    await build(false);
+    await expect(service.grantSmsConsent('u1')).resolves.toBeTruthy();
+  });
+
+  it('sends the unverified case to the code step instead', async () => {
+    await build(false, account({ isPhoneVerified: false }));
+    await expect(service.grantSmsConsent('u1')).rejects.toThrow(/Verify this number first/);
+    expect(consent.recordConsent).not.toHaveBeenCalled();
   });
 });
