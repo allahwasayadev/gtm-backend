@@ -157,8 +157,9 @@ describe('MatchingController', () => {
           { id: 'their-2', accountName: 'Their 2', normalizedName: 'their-2' },
         ],
       } as never);
+    // Before the call pair 1 is already accepted (that is the 1 in 1 -> 2);
+    // after it, pair 1 plus the pair this request accepts.
     matchDecisionsRepository.findByConnection
-      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
         {
           id: 'd-1',
@@ -166,10 +167,34 @@ describe('MatchingController', () => {
           yourAccountId: 'your-1',
           theirAccountId: 'their-1',
           decision: 'accepted',
-          yourNormalizedNameSnapshot: null,
-          theirNormalizedNameSnapshot: null,
+          yourNormalizedNameSnapshot: 'your-1',
+          theirNormalizedNameSnapshot: 'their-1',
           createdAt: new Date('2026-02-19T20:15:00.000Z'),
           updatedAt: new Date('2026-02-19T20:15:00.000Z'),
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'd-1',
+          connectionId: 'c-1',
+          yourAccountId: 'your-1',
+          theirAccountId: 'their-1',
+          decision: 'accepted',
+          yourNormalizedNameSnapshot: 'your-1',
+          theirNormalizedNameSnapshot: 'their-1',
+          createdAt: new Date('2026-02-19T20:15:00.000Z'),
+          updatedAt: new Date('2026-02-19T20:15:00.000Z'),
+        },
+        {
+          id: 'd-2',
+          connectionId: 'c-1',
+          yourAccountId: 'your-2',
+          theirAccountId: 'their-2',
+          decision: 'accepted',
+          yourNormalizedNameSnapshot: 'your-2',
+          theirNormalizedNameSnapshot: 'their-2',
+          createdAt: new Date('2026-02-19T20:16:00.000Z'),
+          updatedAt: new Date('2026-02-19T20:16:00.000Z'),
         },
       ]);
     matchingService.findMatches
@@ -187,8 +212,8 @@ describe('MatchingController', () => {
       yourAccountId: 'your-2',
       theirAccountId: 'their-2',
       decision: 'accepted',
-      yourNormalizedNameSnapshot: null,
-      theirNormalizedNameSnapshot: null,
+      yourNormalizedNameSnapshot: 'your-2',
+      theirNormalizedNameSnapshot: 'their-2',
       createdAt: new Date('2026-02-19T20:16:00.000Z'),
       updatedAt: new Date('2026-02-19T20:16:00.000Z'),
     });
@@ -222,14 +247,27 @@ describe('MatchingController', () => {
       'c-1',
       { user: { id: 'sender-1' } },
       {
-        yourAccountId: 'your-1',
-        theirAccountId: 'their-1',
+        yourAccountId: 'your-2',
+        theirAccountId: 'their-2',
         decision: 'accepted',
       },
     );
     await new Promise((resolve) => setImmediate(resolve));
 
+    // The decision recorded is the pair the request named, with the snapshots
+    // taken from the accounts actually on the two lists.
+    expect(matchDecisionsRepository.upsertDecision).toHaveBeenCalledWith({
+      connectionId: 'c-1',
+      yourAccountId: 'your-2',
+      theirAccountId: 'their-2',
+      decision: 'accepted',
+      yourNormalizedNameSnapshot: 'your-2',
+      theirNormalizedNameSnapshot: 'their-2',
+    });
     expect(connectionsRepository.clearMutedForUser).toHaveBeenCalledTimes(1);
+    expect(
+      notificationsService.createNewOverlapNotifications,
+    ).toHaveBeenCalledTimes(1);
     // mutedRecipientUserIdsAtDiscovery is captured before autoUnmuteEligibleUsers,
     // and deliverableNotifications drops anyone muted at discovery. So the sender
     // is auto-unmuted but is NOT told about the overlap found while muted —
