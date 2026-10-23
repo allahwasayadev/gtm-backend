@@ -560,6 +560,16 @@ export class UsersService {
     if (!admin || !admin.roles?.includes('Admin')) {
       throw new NotFoundException('Admin access required');
     }
+    // An admin cannot delete their own account through this endpoint. The admin
+    // Users screen already hides the control for the signed-in row; enforce the
+    // same here so a crafted request cannot bypass it. adminUserId is bound to
+    // the JWT, so this compares the real caller against the target. Ordinary
+    // self-closure stays available through DELETE /users/profile.
+    if (adminUserId === targetUserId) {
+      throw new ForbiddenException(
+        'You cannot delete your own account here. Close it from your profile settings instead.',
+      );
+    }
     const target = await this.usersRepository.findById(targetUserId);
     if (!target) {
       throw new NotFoundException('User not found');
