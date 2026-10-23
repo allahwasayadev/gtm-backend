@@ -282,6 +282,24 @@ export class SmsConsentService {
   }
 
   /** Whether this number is currently opted out, for keyword handling. */
+  /**
+   * Whether this NUMBER is currently stopped, judged from its own audit trail.
+   *
+   * `isOptedOut` asks whether some user *currently holding* the number is
+   * flagged opted out, which quietly answers "no" the moment the number is
+   * moved off that account — so changing away from a stopped number and back
+   * again would unblock it. STOP belongs to the number, so the latest event
+   * recorded against the number is what decides.
+   */
+  async isNumberStopped(phoneNumber: string): Promise<boolean> {
+    const latest = await this.prisma.smsConsentEvent.findFirst({
+      where: { phoneNumber },
+      orderBy: { createdAt: 'desc' },
+      select: { action: true },
+    });
+    return latest?.action === 'revoked';
+  }
+
   async isOptedOut(phoneNumber: string): Promise<boolean> {
     const user = await this.prisma.user.findFirst({
       where: { phoneNumber, smsOptedOut: true },

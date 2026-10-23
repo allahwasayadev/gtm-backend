@@ -134,21 +134,32 @@ describe('MatchingController', () => {
     const connection = createConnection({
       senderMutedAt: new Date('2026-02-19T20:10:00.000Z'),
       senderMutedMatchCount: 1,
-      lastObservedSharedMatchCount: 2,
+      // A publication needs a real increase: handleSharedMatchCountChange
+      // returns false when the count is unchanged.
+      lastObservedSharedMatchCount: 1,
     });
 
     connectionsRepository.findAcceptedConnectionWithUsers.mockResolvedValue(
       connection as never,
     );
     accountListsRepository.findFirstActive
+      // Both pairs must exist on both lists: buildOverlapNotificationCandidates
+      // skips any match whose accounts are not on them.
       .mockResolvedValueOnce({
-        accounts: [{ id: 'your-1', accountName: 'Your 1', normalizedName: 'your-1' }],
+        accounts: [
+          { id: 'your-1', accountName: 'Your 1', normalizedName: 'your-1' },
+          { id: 'your-2', accountName: 'Your 2', normalizedName: 'your-2' },
+        ],
       } as never)
       .mockResolvedValueOnce({
-        accounts: [{ id: 'their-1', accountName: 'Their 1', normalizedName: 'their-1' }],
+        accounts: [
+          { id: 'their-1', accountName: 'Their 1', normalizedName: 'their-1' },
+          { id: 'their-2', accountName: 'Their 2', normalizedName: 'their-2' },
+        ],
       } as never);
+    // Before the call pair 1 is already accepted (that is the 1 in 1 -> 2);
+    // after it, pair 1 plus the pair this request accepts.
     matchDecisionsRepository.findByConnection
-      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
         {
           id: 'd-1',
@@ -156,8 +167,34 @@ describe('MatchingController', () => {
           yourAccountId: 'your-1',
           theirAccountId: 'their-1',
           decision: 'accepted',
+          yourNormalizedNameSnapshot: 'your-1',
+          theirNormalizedNameSnapshot: 'their-1',
           createdAt: new Date('2026-02-19T20:15:00.000Z'),
           updatedAt: new Date('2026-02-19T20:15:00.000Z'),
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'd-1',
+          connectionId: 'c-1',
+          yourAccountId: 'your-1',
+          theirAccountId: 'their-1',
+          decision: 'accepted',
+          yourNormalizedNameSnapshot: 'your-1',
+          theirNormalizedNameSnapshot: 'their-1',
+          createdAt: new Date('2026-02-19T20:15:00.000Z'),
+          updatedAt: new Date('2026-02-19T20:15:00.000Z'),
+        },
+        {
+          id: 'd-2',
+          connectionId: 'c-1',
+          yourAccountId: 'your-2',
+          theirAccountId: 'their-2',
+          decision: 'accepted',
+          yourNormalizedNameSnapshot: 'your-2',
+          theirNormalizedNameSnapshot: 'their-2',
+          createdAt: new Date('2026-02-19T20:16:00.000Z'),
+          updatedAt: new Date('2026-02-19T20:16:00.000Z'),
         },
       ]);
     matchingService.findMatches
@@ -172,9 +209,11 @@ describe('MatchingController', () => {
     matchDecisionsRepository.upsertDecision.mockResolvedValue({
       id: 'd-2',
       connectionId: 'c-1',
-      yourAccountId: 'your-1',
-      theirAccountId: 'their-1',
+      yourAccountId: 'your-2',
+      theirAccountId: 'their-2',
       decision: 'accepted',
+      yourNormalizedNameSnapshot: 'your-2',
+      theirNormalizedNameSnapshot: 'their-2',
       createdAt: new Date('2026-02-19T20:16:00.000Z'),
       updatedAt: new Date('2026-02-19T20:16:00.000Z'),
     });
@@ -183,21 +222,24 @@ describe('MatchingController', () => {
       senderMutedAt: null,
       senderMutedMatchCount: null,
     } as never);
+    // The 1 -> 2 compare-and-set has to succeed for the publication to run.
+    connectionsRepository.claimSharedMatchCountUpdate.mockResolvedValue(true);
     notificationsService.createNewOverlapNotifications.mockResolvedValue({
-      count: 2,
+      count: 1,
     });
+    // Only the pair that is new this time is claimed; pair 1 was already seen.
     observedOverlapNotificationsRepository.claimNew.mockResolvedValue([
       {
         userId: 'sender-1',
         connectionId: 'c-1',
-        senderNormalizedName: 'your-1',
-        receiverNormalizedName: 'their-1',
+        senderNormalizedName: 'your-2',
+        receiverNormalizedName: 'their-2',
       },
       {
         userId: 'receiver-1',
         connectionId: 'c-1',
-        senderNormalizedName: 'your-1',
-        receiverNormalizedName: 'their-1',
+        senderNormalizedName: 'your-2',
+        receiverNormalizedName: 'their-2',
       },
     ]);
 
@@ -205,30 +247,50 @@ describe('MatchingController', () => {
       'c-1',
       { user: { id: 'sender-1' } },
       {
-        yourAccountId: 'your-1',
-        theirAccountId: 'their-1',
+        yourAccountId: 'your-2',
+        theirAccountId: 'their-2',
         decision: 'accepted',
       },
     );
     await new Promise((resolve) => setImmediate(resolve));
 
+    // The decision recorded is the pair the request named, with the snapshots
+    // taken from the accounts actually on the two lists.
+    expect(matchDecisionsRepository.upsertDecision).toHaveBeenCalledWith({
+      connectionId: 'c-1',
+      yourAccountId: 'your-2',
+      theirAccountId: 'their-2',
+      decision: 'accepted',
+      yourNormalizedNameSnapshot: 'your-2',
+      theirNormalizedNameSnapshot: 'their-2',
+    });
     expect(connectionsRepository.clearMutedForUser).toHaveBeenCalledTimes(1);
-    expect(notificationsService.createNewOverlapNotifications).toHaveBeenCalledWith([
-      {
-        userId: 'sender-1',
-        connectionName: 'Receiver One',
-        connectionId: 'c-1',
-        accountName: 'Your 1',
-        partnerAccountName: 'Their 1',
-      },
+    expect(
+      notificationsService.createNewOverlapNotifications,
+    ).toHaveBeenCalledTimes(1);
+    // mutedRecipientUserIdsAtDiscovery is captured before autoUnmuteEligibleUsers,
+    // and deliverableNotifications drops anyone muted at discovery. So the sender
+    // is auto-unmuted but is NOT told about the overlap found while muted —
+    // which is what the Mute confirmation copy promises.
+    expect(
+      notificationsService.createNewOverlapNotifications,
+    ).toHaveBeenCalledWith([
       {
         userId: 'receiver-1',
         connectionName: 'Sender One',
         connectionId: 'c-1',
-        accountName: 'Their 1',
-        partnerAccountName: 'Your 1',
+        accountName: 'Their 2',
+        partnerAccountName: 'Your 2',
       },
     ]);
+    const [publishedNotifications] =
+      notificationsService.createNewOverlapNotifications.mock.calls[0];
+    expect(
+      publishedNotifications.some(
+        (notification: { userId: string }) =>
+          notification.userId === 'sender-1',
+      ),
+    ).toBe(false);
   });
 
   it('returns false when users are not muted', async () => {
@@ -312,7 +374,9 @@ describe('MatchingController', () => {
     const sendNewOverlapNotificationsSpy = jest
       .spyOn(
         controller as unknown as {
-          sendNewOverlapNotifications: (c: TestConnectionState) => Promise<void>;
+          sendNewOverlapNotifications: (
+            c: TestConnectionState,
+          ) => Promise<void>;
         },
         'sendNewOverlapNotifications',
       )
@@ -329,11 +393,80 @@ describe('MatchingController', () => {
       }
     ).handleSharedMatchCountChange(connection, 2);
 
-    expect(connectionsRepository.claimSharedMatchCountUpdate).toHaveBeenCalledWith(
-      'c-1',
-      1,
-      2,
-    );
+    expect(
+      connectionsRepository.claimSharedMatchCountUpdate,
+    ).toHaveBeenCalledWith('c-1', 1, 2);
     expect(sendNewOverlapNotificationsSpy).not.toHaveBeenCalled();
+  });
+
+  it('publishes nothing when the shared count is unchanged', async () => {
+    // The idempotency half of the contract: an accept that re-confirms an
+    // already-counted overlap must not re-announce it. handleSharedMatchCountChange
+    // returns false on equality, so nothing downstream should run at all.
+    const connection = createConnection({
+      lastObservedSharedMatchCount: 2,
+    });
+
+    connectionsRepository.findAcceptedConnectionWithUsers.mockResolvedValue(
+      connection as never,
+    );
+    accountListsRepository.findFirstActive
+      .mockResolvedValueOnce({
+        accounts: [
+          { id: 'your-1', accountName: 'Your 1', normalizedName: 'your-1' },
+          { id: 'your-2', accountName: 'Your 2', normalizedName: 'your-2' },
+        ],
+      } as never)
+      .mockResolvedValueOnce({
+        accounts: [
+          { id: 'their-1', accountName: 'Their 1', normalizedName: 'their-1' },
+          { id: 'their-2', accountName: 'Their 2', normalizedName: 'their-2' },
+        ],
+      } as never);
+    matchDecisionsRepository.findByConnection
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    // Two resolved before and after: the same overlaps, nothing new.
+    matchingService.findMatches
+      .mockReturnValueOnce({
+        resolved: [createResolvedMatch('1'), createResolvedMatch('2')],
+        suggested: [],
+      })
+      .mockReturnValueOnce({
+        resolved: [createResolvedMatch('1'), createResolvedMatch('2')],
+        suggested: [],
+      });
+    matchDecisionsRepository.upsertDecision.mockResolvedValue({
+      id: 'd-3',
+      connectionId: 'c-1',
+      yourAccountId: 'your-2',
+      theirAccountId: 'their-2',
+      decision: 'accepted',
+      yourNormalizedNameSnapshot: null,
+      theirNormalizedNameSnapshot: null,
+      createdAt: new Date('2026-02-19T20:20:00.000Z'),
+      updatedAt: new Date('2026-02-19T20:20:00.000Z'),
+    });
+
+    await controller.setMatchDecision(
+      'c-1',
+      { user: { id: 'sender-1' } },
+      {
+        yourAccountId: 'your-2',
+        theirAccountId: 'their-2',
+        decision: 'accepted',
+      },
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(
+      connectionsRepository.claimSharedMatchCountUpdate,
+    ).not.toHaveBeenCalled();
+    expect(
+      observedOverlapNotificationsRepository.claimNew,
+    ).not.toHaveBeenCalled();
+    expect(
+      notificationsService.createNewOverlapNotifications,
+    ).not.toHaveBeenCalled();
   });
 });

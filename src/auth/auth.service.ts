@@ -17,6 +17,10 @@ import { TwilioSmsService } from '../sms/twilio-sms.service';
 import { SmsConsentService } from '../sms/sms-consent.service';
 import { SmsConsentSource } from '../sms/sms-consent.constants';
 import { testCodeFor } from '../sms/sms-test-mode';
+import {
+  canonicalizePhoneNumber,
+  US_COUNTRY_CODE,
+} from '../common/utils/phone.util';
 import { SignupDto, LoginDto } from './dto';
 
 const VERIFICATION_CODE_EXPIRY_MINUTES = 15;
@@ -257,13 +261,63 @@ export class AuthService {
     }
 
     const phoneNumber = (user as { phoneNumber?: string }).phoneNumber;
+    const outstanding = this.outstandingPhoneCode(user);
 
     return {
       email: user.email,
       phoneHint: phoneNumber ? this.maskPhoneNumber(phoneNumber) : null,
       needsPhoneNumber: !phoneNumber,
+      /**
+       * Is a code the user already holds still worth entering?
+       *
+       * This hand-off is usually reached by a session that has sent nothing,
+       * but it is also how a number change started on the profile screen
+       * ends up here: that send un-verified the session, and the next
+       * request 403'd into this. Saying so lets the activation screen ask
+       * for the code instead of texting a second one.
+       *
+       * Answered from the account's own row, not from anything the client
+       * says. A client marker is set when a send RESOLVES, and the 403 that
+       * brings the user here can arrive first; it also survives into the
+       * wrong account or number. The row cannot be stale or raced.
+       *
+       * The code and its hash never leave the server — only whether one is
+       * worth typing.
+       */
+      codeOutstanding: outstanding.outstanding,
+      codeExpiresAt: outstanding.expiresAt,
       activationToken: this.generateActivationToken(user.id, user.email),
     };
+  }
+
+  /**
+   * Is there a stored verification code this user could still successfully
+   * enter: present, unexpired, and with attempts left?
+   *
+   * Mirrors exactly the checks verifyPhoneCode() applies, so a code reported
+   * as outstanding is one that would actually be accepted. Nothing derived
+   * from it reveals the code.
+   */
+  private outstandingPhoneCode(user: unknown): {
+    outstanding: boolean;
+    expiresAt: Date | null;
+  } {
+    const row = user as {
+      phoneVerificationCode?: string | null;
+      phoneVerificationCodeExpiresAt?: Date | null;
+      phoneVerificationAttempts?: number | null;
+    };
+
+    const expiresAt = row.phoneVerificationCodeExpiresAt ?? null;
+    const attempts = row.phoneVerificationAttempts ?? 0;
+
+    const outstanding =
+      Boolean(row.phoneVerificationCode) &&
+      expiresAt !== null &&
+      new Date(expiresAt) > new Date() &&
+      attempts < MAX_PHONE_VERIFICATION_ATTEMPTS;
+
+    return { outstanding, expiresAt: outstanding ? expiresAt : null };
   }
 
   /**
@@ -290,6 +344,18 @@ export class AuthService {
     const owner = await this.authRepository.findUserByPhoneNumber(normalized);
     if (owner && owner.id !== user.id) {
       throw new ConflictException('Mobile number already in use');
+    }
+
+    /* STOP belongs to the number, and recordConsent below clears it as a fresh
+       opt-in. Without this check, "Use a different number" could be pointed
+       back at a number that had replied STOP and reopen it. A genuinely
+       different number is unaffected, which is what makes correcting a
+       mistyped number still work. */
+    if (await this.smsConsentService.isNumberStopped(normalized)) {
+      throw new ForbiddenException(
+        'This number has opted out of Ovrlap SMS. Reply START to the last ' +
+          'Ovrlap message to resume, then try again.',
+      );
     }
 
     // Consent is recorded against the number actually being used, so a
@@ -558,13 +624,22 @@ export class AuthService {
     return { message: neutralMessage };
   }
 
-  /** Resolve an email address or a mobile number to one account. */
+  /**
+   * Resolve an email address or a mobile number to one account.
+   *
+   * Canonicalises rather than validates. A ten-digit US number resolves the
+   * same account as the same number written +1XXXXXXXXXX, which is what the
+   * reset screens now collect. Unreadable input returns null so the caller
+   * answers with its neutral message: a format-specific 400 here would be an
+   * account-existence oracle, telling an attacker which identifiers are even
+   * considered.
+   */
   private async findUserByIdentifier(identifier: string) {
     const trimmed = identifier.trim();
     if (trimmed.includes('@')) {
       return this.authRepository.findUserByEmail(trimmed.toLowerCase());
     }
-    const normalized = this.normalizePhoneNumber(trimmed);
+    const normalized = canonicalizePhoneNumber(trimmed);
     if (!normalized) return null;
     return this.authRepository.findUserByPhoneNumber(normalized);
   }
@@ -674,12 +749,22 @@ export class AuthService {
     };
   }
 
+  /**
+   * Canonical E.164, or a 400 the user can act on.
+   *
+   * US entry is the default everywhere a user types their own number, so ten
+   * digits are read as +1XXXXXXXXXX. A number written with an explicit country
+   * code is still accepted as given, which is what keeps the non-US numbers on
+   * existing accounts usable. Only genuinely unreadable input is rejected —
+   * and a number with too many digits IS unreadable, never a prefix of itself.
+   */
   private normalizePhoneNumber(phoneNumber: string): string | null {
-    const trimmed = phoneNumber.trim();
-    if (!trimmed) return null;
-    const normalized = trimmed.replace(/[\s().-]/g, '');
-    if (!/^\+[1-9]\d{7,14}$/.test(normalized)) {
-      throw new BadRequestException('Phone number must be in E.164 format (example: +15551234567).');
+    if (!phoneNumber.trim()) return null;
+    const normalized = canonicalizePhoneNumber(phoneNumber);
+    if (!normalized) {
+      throw new BadRequestException(
+        `Enter a 10-digit US mobile number, or a full number with its country code (example: ${US_COUNTRY_CODE}5551234567).`,
+      );
     }
     return normalized;
   }

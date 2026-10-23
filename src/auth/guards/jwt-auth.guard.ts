@@ -3,7 +3,9 @@ import {
   ExecutionContext,
   HttpException,
   HttpStatus,
+  SetMetadata,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
 
 /**
@@ -19,11 +21,32 @@ import { AuthGuard } from '@nestjs/passport';
  * the activation screen instead of logging the user out and losing their
  * place. No SMS is sent here: the code goes out only when the user asks.
  *
- * Deliberately injection-free. Several modules that use this guard do not
- * import JwtModule, so requiring JwtService here would fail at runtime in
- * exactly those modules. The client exchanges its session for an activation
- * token via /auth/activation/from-session, which lives where JwtModule exists.
+ * No JwtService here. Several modules that use this guard do not import
+ * JwtModule, so requiring it would fail at runtime in exactly those modules.
+ * The client exchanges its session for an activation token via
+ * /auth/activation/from-session, which lives where JwtModule exists.
+ * (Reflector is different: the core module provides it everywhere.)
  */
+
+/** Metadata key for the opt-out below. */
+export const SKIP_PHONE_GATE = 'skipPhoneGate';
+
+/**
+ * Authenticate this route, but do not require a verified phone.
+ *
+ * For the routes whose whole purpose is to BECOME verified. Asking for a code
+ * sets isPhoneVerified back to false — the new number is not proved yet — so
+ * without this the user's own next request, the one submitting that code, is
+ * refused by the gate it exists to get them past. They receive a code they
+ * can never spend.
+ *
+ * It is an opt-out and not an opt-in on purpose: a route added later is gated
+ * unless someone says otherwise, in writing, at the route. Marking a route
+ * removes only the verification check — authentication, rate limiting, and
+ * the consent and opt-out gates are all untouched, and the handler still acts
+ * solely on the caller's own account.
+ */
+export const SkipPhoneGate = () => SetMetadata(SKIP_PHONE_GATE, true);
 export interface GatedUser {
   id: string;
   email: string;
@@ -56,11 +79,29 @@ export function assertPhoneVerified(user: GatedUser | undefined): boolean {
   );
 }
 
+/**
+ * Reads the opt-out metadata. Constructed here rather than injected: this
+ * guard must keep a zero-argument constructor, because the modules that use
+ * it do not all import the providers an injected dependency would need.
+ * Reflector itself has no dependencies, so constructing one costs nothing.
+ */
+const reflector = new Reflector();
+
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const authenticated = (await super.canActivate(context)) as boolean;
     if (!authenticated) return false;
+
+    // Authentication always runs; only the verification check is skippable.
+    // A method-level @UseGuards would not have worked here: Nest ADDS those
+    // to a controller's guards rather than replacing them, so this guard —
+    // and its gate — would still have run.
+    const skipGate = reflector.getAllAndOverride<boolean>(SKIP_PHONE_GATE, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (skipGate) return true;
 
     const request = context
       .switchToHttp()

@@ -4,6 +4,7 @@ import {
   NotFoundException,
   Logger,
   BadRequestException,
+  ForbiddenException,
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
@@ -18,6 +19,10 @@ import {
   VerifyPhoneVerificationCodeDto,
 } from './dto';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  canonicalizePhoneNumber,
+  US_COUNTRY_CODE,
+} from '../common/utils/phone.util';
 import { ConnectionsRepository } from '../connections/connections.repository';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TwilioSmsService } from '../sms/twilio-sms.service';
@@ -152,8 +157,27 @@ export class UsersService {
       ...(typeof dto.name === 'string' ? { name: dto.name } : {}),
       ...(typeof dto.email === 'string' ? { email: dto.email } : {}),
       ...(typeof dto.company === 'string' ? { company: dto.company } : {}),
-      ...(Array.isArray(dto.roles) ? { roles: dto.roles } : {}),
     };
+
+    /* Admin membership is not a profile field. This endpoint is JWT-only, so
+       without this a signed-in user could PATCH themselves roles: [Admin] and
+       the next request would pass AdminAuthGuard, which trusts the roles the
+       JWT strategy reloads from the database. The profile form may change the
+       business roles and nothing else: a request asking for Admin from someone
+       who does not already hold it is refused outright, and an existing Admin
+       keeps it whatever the form posts (the form always sends a single business
+       role, which would otherwise demote them silently on save). */
+    if (Array.isArray(dto.roles)) {
+      const currentRoles: UserRole[] = user.roles ?? [];
+      const isAdmin = currentRoles.includes('Admin');
+      if (dto.roles.includes('Admin') && !isAdmin) {
+        throw new ForbiddenException(
+          'Admin access cannot be granted from the profile form.',
+        );
+      }
+      const businessRoles = dto.roles.filter((role) => role !== 'Admin');
+      updateData.roles = isAdmin ? [...businessRoles, 'Admin'] : businessRoles;
+    }
 
     if (typeof normalizedPhoneNumber !== 'undefined' && isPhoneNumberChanging) {
       updateData.phoneNumber = normalizedPhoneNumber;
@@ -226,6 +250,23 @@ export class UsersService {
       };
     }
 
+    /* STOP stays STOP, and it is checked before anything is written.
+       recordConsent deliberately clears smsOptedOut as a fresh opt-in, so
+       recording first and asserting afterwards silently undid a STOP the user
+       had sent. Refusing here means no consent row, no verification code and
+       no message.
+
+       The refusal is bound to the TARGET number, not to the account. A user
+       whose old number stopped must still be able to correct it to a different
+       number; what they must not be able to do is point back at the stopped
+       one and have it quietly reopened. */
+    if (await this.smsConsentService.isNumberStopped(phoneNumber)) {
+      throw new ForbiddenException(
+        'This number has opted out of Ovrlap SMS. Reply START to the last ' +
+          'Ovrlap message to resume, then try again.',
+      );
+    }
+
     if (user.lastPhoneVerificationCodeSentAt) {
       const timeSinceLastSent =
         (Date.now() - user.lastPhoneVerificationCodeSentAt.getTime()) / 1000;
@@ -295,6 +336,69 @@ export class UsersService {
    * texted STOP: consent belongs to the handset, and over-suppressing is the
    * safe direction for compliance.
    */
+  /**
+   * Re-consent from profile settings, for the number already on file.
+   *
+   * The published SMS terms say that after STOP you reply START and then tick
+   * the consent box in profile settings to start again — START clears the
+   * carrier stop, it does not restore consent inside the app. This is that
+   * second half, and without it a user who stopped and restarted could never
+   * receive a password reset code again.
+   *
+   * It records consent and nothing else: no message is sent, and no
+   * re-verification is demanded of a number that is already verified. A number
+   * whose latest event is still a STOP is refused before anything is written,
+   * so this cannot be used to walk over an active opt-out.
+   */
+  async grantSmsConsent(
+    userId: string,
+    requestContext?: { ipAddress?: string | null; userAgent?: string | null },
+  ): Promise<{
+    message: string;
+    smsConsent: boolean;
+    smsOptedOut: boolean;
+    phoneNumber: string;
+  }> {
+    const user = (await this.usersRepository.findById(
+      userId,
+    )) as UserWithPhoneVerification | null;
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.phoneNumber) {
+      throw new BadRequestException('No phone number on file.');
+    }
+
+    if (!user.isPhoneVerified) {
+      // An unverified number captures consent on the send-a-code step instead,
+      // where the wording sits directly above the button.
+      throw new BadRequestException(
+        'Verify this number first; consent is captured when the code is requested.',
+      );
+    }
+
+    if (await this.smsConsentService.isNumberStopped(user.phoneNumber)) {
+      throw new ForbiddenException(
+        'This number has opted out of Ovrlap SMS. Reply START to the last ' +
+          'Ovrlap message to resume, then agree again here.',
+      );
+    }
+
+    await this.smsConsentService.recordConsent(userId, user.phoneNumber, {
+      source: SmsConsentSource.ProfileSettings,
+      ipAddress: requestContext?.ipAddress,
+      userAgent: requestContext?.userAgent,
+    });
+
+    return {
+      message: 'Thanks — Ovrlap can send account security codes to this number again.',
+      smsConsent: true,
+      smsOptedOut: false,
+      phoneNumber: user.phoneNumber,
+    };
+  }
+
   async withdrawSmsConsent(userId: string): Promise<{
     message: string;
     smsConsent: boolean;
@@ -456,6 +560,16 @@ export class UsersService {
     if (!admin || !admin.roles?.includes('Admin')) {
       throw new NotFoundException('Admin access required');
     }
+    // An admin cannot delete their own account through this endpoint. The admin
+    // Users screen already hides the control for the signed-in row; enforce the
+    // same here so a crafted request cannot bypass it. adminUserId is bound to
+    // the JWT, so this compares the real caller against the target. Ordinary
+    // self-closure stays available through DELETE /users/profile.
+    if (adminUserId === targetUserId) {
+      throw new ForbiddenException(
+        'You cannot delete your own account here. Close it from your profile settings instead.',
+      );
+    }
     const target = await this.usersRepository.findById(targetUserId);
     if (!target) {
       throw new NotFoundException('User not found');
@@ -504,16 +618,21 @@ export class UsersService {
     return crypto.createHash('sha256').update(code).digest('hex');
   }
 
+  /**
+   * Canonical E.164, or a 400 the user can act on. Same rule as signup and
+   * activation — see common/utils/phone.util.ts. Ten digits are read as a US
+   * number; an explicit country code is honoured, so a profile that already
+   * holds a non-US number can still be saved.
+   */
   private normalizePhoneNumber(phoneNumber: string): string | null {
-    const trimmed = phoneNumber.trim();
-    if (!trimmed) {
+    if (!phoneNumber.trim()) {
       return null;
     }
 
-    const normalized = trimmed.replace(/[\s().-]/g, '');
-    if (!/^\+[1-9]\d{7,14}$/.test(normalized)) {
+    const normalized = canonicalizePhoneNumber(phoneNumber);
+    if (!normalized) {
       throw new BadRequestException(
-        'Phone number must be in E.164 format (example: +15551234567).',
+        `Enter a 10-digit US mobile number, or a full number with its country code (example: ${US_COUNTRY_CODE}5551234567).`,
       );
     }
 

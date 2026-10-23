@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CompleteOnboardingDto, SendPhoneVerificationCodeDto, UpdateProfileDto, VerifyPhoneVerificationCodeDto } from './dto';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { JwtAuthGuard, SkipPhoneGate } from '../auth/guards/jwt-auth.guard';
 import { AdminAuthGuard } from '../auth/guards/admin-auth.guard';
 
 @Controller('users')
@@ -44,6 +44,20 @@ export class UsersController {
     return this.usersService.updateProfile(req.user.id, updateProfileDto);
   }
 
+  /**
+   * Send a verification code to the number on the profile.
+   *
+   * Authenticated, but outside the activation gate. Sending a code sets
+   * isPhoneVerified back to false — the number being proved is not proved yet
+   * — so under JwtAuthGuard the user's own next request would be rejected by
+   * the gate this request exists to get them past. Same circularity, and same
+   * remedy, as /auth/activation/from-session.
+   *
+   * Nothing else is relaxed: the caller is still authenticated, acts only on
+   * their own account, and the send is still rate-limited and still refused
+   * by assertMaySend without consent for THIS number.
+   */
+  @SkipPhoneGate()
   @Post('profile/phone-verification/send')
   async sendPhoneVerificationCode(
     @Request() req: any,
@@ -58,12 +72,33 @@ export class UsersController {
     });
   }
 
+  /**
+   * Submit the code and become verified.
+   *
+   * Outside the gate for the same reason as the send above, and this is the
+   * endpoint that proves it: the user is unverified precisely because they
+   * asked for this code, so the activation gate made the step unreachable.
+   *
+   * Safe to leave outside the gate: it acts only on the caller's own account,
+   * mints no session token, and still requires a stored, unexpired, hashed
+   * code within the attempt limit.
+   */
+  @SkipPhoneGate()
   @Post('profile/phone-verification/verify')
   async verifyPhoneVerificationCode(
     @Request() req: any,
     @Body() dto: VerifyPhoneVerificationCodeDto,
   ) {
     return this.usersService.verifyPhoneVerificationCode(req.user.id, dto);
+  }
+
+  /** Give SMS consent again from profile settings, for the number on file. */
+  @Post('profile/sms-consent')
+  async grantSmsConsent(@Request() req: any) {
+    return this.usersService.grantSmsConsent(req.user.id, {
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers?.['user-agent'] ?? null,
+    });
   }
 
   /** Withdraw SMS consent from profile settings. */
