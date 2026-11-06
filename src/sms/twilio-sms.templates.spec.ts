@@ -150,4 +150,58 @@ describe('the exact text sent to Twilio', () => {
     await new TwilioSmsService().sendVerificationCode('+14155550123', '111222');
     expect(sent!.get('Body')).not.toMatch(/https?:\/\/|www\.|ovrlap\.app/i);
   });
+
+  /**
+   * The WebOTP binding line is gone for good.
+   *
+   * These set SMS_OTP_DOMAIN exactly the way production still does - the SSM
+   * parameter and the deploy script that reads it were deliberately left in
+   * place - and assert the wire body is completely unaffected by it.
+   */
+  describe('the removed WebOTP suffix cannot come back', () => {
+    beforeEach(() => {
+      process.env.SMS_OTP_DOMAIN = 'www.ovrlap.app';
+    });
+
+    it('sends the approved verification text unchanged with the domain set', async () => {
+      await new TwilioSmsService().sendVerificationCode(
+        '+14155550123',
+        '371594',
+      );
+
+      const body = sent!.get('Body')!;
+      expect(body).toBe(APPROVED('371594'));
+      expect(body).not.toContain('@');
+      expect(body).not.toContain('#');
+      expect(body).not.toContain('\n');
+      expect(body).not.toMatch(/ovrlap\.app/i);
+      expect(body.length).toBe(129);
+    });
+
+    it('sends the reset text with no binding line when the domain is set', async () => {
+      await new TwilioSmsService().sendPasswordResetCode(
+        '+14155550123',
+        '554433',
+      );
+
+      const body = sent!.get('Body')!;
+      expect(body).toContain('password reset code');
+      expect(body).toContain('554433');
+      expect(body).not.toContain('@');
+      expect(body).not.toContain('\n');
+      expect(body).not.toMatch(/ovrlap\.app/i);
+    });
+
+    it('keeps the approved expiry and STOP/HELP with the domain set', async () => {
+      await new TwilioSmsService().sendVerificationCode(
+        '+14155550123',
+        '667788',
+      );
+
+      const body = sent!.get('Body')!;
+      expect(body).toContain('It expires in 10 minutes.');
+      expect(body).toContain('Do not share this code.');
+      expect(body).toContain('Reply STOP to opt out, HELP for help.');
+    });
+  });
 });
