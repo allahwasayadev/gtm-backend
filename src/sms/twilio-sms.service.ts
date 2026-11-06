@@ -6,7 +6,6 @@ import {
 import { getTwilioSmsConfig, TwilioSmsConfig } from './twilio.config';
 import { isTestNumber } from './sms-test-mode';
 import { isUsableIdentifier, isUsableSecret } from './twilio-credentials';
-import { withOtpDomainBinding } from './otp-domain.config';
 
 /**
  * Outgoing message templates. No URL in either: a link in a verification
@@ -31,17 +30,16 @@ import { withOtpDomainBinding } from './otp-domain.config';
  * Do not shorten this without first updating the campaign's sample messages
  * and having the change accepted — live traffic must match what was approved.
  *
- * SMS_OTP_DOMAIN appends one further line, "@<host> #<code>", which Android
- * Chrome needs to fill the code (see otp-domain.config.ts). That line CHANGES
- * the body, so the campaign's samples must be updated and accepted before it
- * is switched on anywhere real. Unset — the default — leaves this string
- * byte-for-byte as approved.
+ * NOTHING is appended to this string. An Android WebOTP binding line
+ * ("@<host> #<code>") was added here when SMS_OTP_DOMAIN was set; it changed
+ * the body away from the approved samples and has been removed. SMS_OTP_DOMAIN
+ * is ignored even where it is still set. See the 2026-11-05 OTP investigation
+ * for the delivery evidence.
  */
 export function verificationCodeMessage(code: string): string {
-  return withOtpDomainBinding(
+  return (
     `Ovrlap: Your verification code is ${code}. It expires in 10 minutes. ` +
-      `Do not share this code. Reply STOP to opt out, HELP for help.`,
-    code,
+    `Do not share this code. Reply STOP to opt out, HELP for help.`
   );
 }
 
@@ -55,10 +53,9 @@ export function verificationCodeMessage(code: string): string {
  * is updated and accepted. Mislabelling it would hide that, not fix it.
  */
 export function passwordResetCodeMessage(code: string): string {
-  return withOtpDomainBinding(
+  return (
     `Ovrlap: Your password reset code is ${code}. It expires in 10 minutes. ` +
-      `Do not share this code. Reply STOP to opt out, HELP for help.`,
-    code,
+    `Do not share this code. Reply STOP to opt out, HELP for help.`
   );
 }
 
